@@ -10,10 +10,9 @@ This project provides an automated tethered boot pipeline for the iPhone SE 1st 
 
 ## Installation Pipeline
 
-1. Boot the stock 15.8.8 SSH ramdisk without SEP: `N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16`.
-2. Capture the complete SEP IMG4 from Preboot and its embedded device ticket: `./n61.sh capture-sep --target n69-ios16`. If multiple Preboot slots exist, set `N69_PREBOOT_HASH` to the correct 96-character slot hash. This writes private device-specific files under `state/`; never share them.
-3. Return the device to DFU and build boot images: `./run_boot.sh full`. The captured SEP is copied unchanged, not re-signed from an IPSW.
-4. Use `n69ap_ios16_full_install.sh` on an Intel Mac for the experimental installation.
+On an Intel Mac, run `N69_EXPERIMENTAL_INSTALL_ACK=1 ./n69ap_ios16_full_install.sh full`. The installer prepares the stock 15.8.8 SSH ramdisk, captures the complete SEP IMG4 and its embedded device ticket from Preboot if needed, verifies them against the connected phone, and proceeds with the build and installation. Follow its DFU prompts; physical interaction is required between boot stages.
+
+If multiple Preboot slots exist, set `N69_PREBOOT_HASH` to the correct 96-character slot hash. The captured device-specific files in `state/` are private; never share them. The captured SEP is copied unchanged, not re-signed from an IPSW.
 
 Recapture the SEP after restoring the stock system or changing devices. Capture verifies the embedded ticket and its Preboot slot; the shell boot path also checks its ECID and CPID against the connected recovery device. Hardware boot success is not yet verified.
 

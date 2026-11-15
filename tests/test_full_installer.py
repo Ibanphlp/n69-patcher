@@ -1,0 +1,94 @@
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class FullInstallerTests(unittest.TestCase):
+    def run_installer(self, *, captured=False, ramdisk=True, fail_capture=False, fail_verify=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "events"
+
+            def write(path, content, executable=False):
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+                if executable:
+                    target.chmod(0o755)
+
+            script = (ROOT / "n69ap_ios16_full_install.sh").read_text()
+            # Exercise the real sequence without giving test stubs root privileges.
+            script = script.replace('if [[ $EUID -ne 0 ]]; then', 'if false; then', 1)
+            write("installer.sh", script, True)
+            write("tools/SSHRD_Script/Darwin/irecovery", "#!/bin/bash\nif [[ $1 == -q ]]; then printf 'MODEL: n69ap\\nMODE: DFU\\nCPID: 0x8003\\nECID: 0x123\\nPWND\\n'; fi\n", True)
+            for tool in ("gaster", "img4"):
+                write("tools/SSHRD_Script/Darwin/" + tool, "#!/bin/bash\nexit 0\n", True)
+            write("ramdisk-main/Darwin/img4tool", "#!/bin/bash\nexit 0\n", True)
+            for name in ("iPhone_4.0_64bit_15.8.8_19H422_Restore.ipsw", "iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw"):
+                write("firmware/" + name, "firmware")
+            components = ("iBSS", "iBEC", "ramdisk", "devicetree", "trustcache", "kernelcache")
+            if ramdisk:
+                for component in components:
+                    write("ramdisk-main/sshramdisk/" + component + ".img4", "image")
+            else:
+                write("ramdisk-main/sshrd.sh", "#!/bin/bash\nprintf 'generate:%s\\n' \"$1\" >> \"$TEST_LOG\"\nmkdir -p sshramdisk\nfor name in iBSS iBEC ramdisk devicetree trustcache kernelcache; do printf image > \"sshramdisk/$name.img4\"; done\n", True)
+            if captured:
+                write("state/sep-firmware.img4", "captured")
+                write("state/IM4M.bin", "ticket")
+            write("n61.sh", """#!/bin/bash
+printf '%s:%s\n' "$1" "${N61_RAMDISK_SEP:-}" >> "$TEST_LOG"
+if [[ $1 == capture-sep ]]; then
+    [[ ${FAIL_CAPTURE:-0} != 1 ]] || exit 1
+    mkdir -p state
+    printf captured > state/sep-firmware.img4
+    printf ticket > state/IM4M.bin
+fi
+""", True)
+            write("prepare_derived_n69.sh", """#!/bin/bash
+printf 'build:%s\n' "$1" >> "$TEST_LOG"
+mkdir -p artifacts/boot
+for name in boot_iBSS boot_iBEC boot_DT boot_TC boot_KC; do printf image > "artifacts/boot/$name.img4"; done
+cp state/sep-firmware.img4 artifacts/boot/sep.img4
+""", True)
+            write("bin/python3", """#!/bin/bash
+cat >/dev/null
+printf 'verify\n' >> "$TEST_LOG"
+[[ ${FAIL_VERIFY:-0} != 1 ]]
+""", True)
+            write("bin/sleep", "#!/bin/bash\nexit 0\n", True)
+            env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
+                       TEST_LOG=str(log), N69_EXPERIMENTAL_INSTALL_ACK="1",
+                       FAIL_CAPTURE=str(int(fail_capture)), FAIL_VERIFY=str(int(fail_verify)))
+            result = subprocess.run(["bash", str(root / "installer.sh"), "full"], cwd=root, env=env,
+                                    input="\n" * 5, capture_output=True, text=True, timeout=30)
+            return result, log.read_text().splitlines() if log.exists() else []
+
+    def test_missing_capture_is_automatic_and_precedes_build(self):
+        result, events = self.run_installer(ramdisk=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events[:6], ["generate:15.8.8", "ramdisk:0", "capture-sep:", "verify", "build:full", "ramdisk:1"])
+        self.assertIn("volumes:", events)
+
+    def test_existing_capture_is_verified_before_build(self):
+        result, events = self.run_installer(captured=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events[:3], ["verify", "build:full", "ramdisk:1"])
+        self.assertNotIn("capture-sep:", events)
+
+    def test_capture_failure_never_builds_or_writes_volumes(self):
+        result, events = self.run_installer(fail_capture=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ["ramdisk:0", "capture-sep:"])
+
+    def test_wrong_device_stops_before_build_and_writes(self):
+        result, events = self.run_installer(captured=True, fail_verify=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ["verify"])
+
+
+if __name__ == "__main__":
+    unittest.main()
