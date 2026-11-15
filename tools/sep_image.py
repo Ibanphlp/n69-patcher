@@ -17,7 +17,10 @@ from ios16se.sep import (  # noqa: E402
     preboot_hash_from_path,
     parse_irecovery_identity,
     receipt,
+    reticket_image,
     select_sep,
+    split_image,
+    im4p_type,
     validate_identity,
     validate_image,
     write_receipt,
@@ -112,6 +115,32 @@ def command_verify_device(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_reticket_ramdisk(args: argparse.Namespace) -> int:
+    source = Path(args.source)
+    destination = Path(args.output)
+    ticket = validate_image(Path(args.sep).read_bytes()).ticket
+    if ticket != Path(args.ticket).read_bytes():
+        raise SepError("Captured SEP ticket does not match the requested IM4M file")
+    types = {
+        "iBSS": "ibss", "iBEC": "ibec", "ramdisk": "rdsk",
+        "devicetree": "rdtr", "trustcache": "rtsc", "kernelcache": "rkrn",
+    }
+    if (source / "bootlogo.img4").is_file():
+        types["bootlogo"] = "rlgo"
+    images = {}
+    for name, expected in types.items():
+        image = (source / f"{name}.img4").read_bytes()
+        payload, _ = split_image(image)
+        if im4p_type(payload) != expected:
+            raise SepError(f"Unexpected IM4P type for {name}; expected {expected}")
+        images[name] = reticket_image(image, ticket)
+    destination.mkdir(parents=True, exist_ok=True)
+    for name, image in images.items():
+        atomic_write(destination / f"{name}.img4", image)
+    print("Ramdisk IM4Ps preserved; all components use the captured SEP ticket")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -142,6 +171,13 @@ def main() -> int:
     verify.add_argument("--img4tool", required=True)
     verify.add_argument("--expect-ticket")
     verify.set_defaults(handler=command_verify_device)
+
+    bundle = subparsers.add_parser("reticket-ramdisk", help="prepare a ramdisk bundle with the captured SEP ticket")
+    bundle.add_argument("--source", required=True)
+    bundle.add_argument("--output", required=True)
+    bundle.add_argument("--sep", required=True)
+    bundle.add_argument("--ticket", required=True)
+    bundle.set_defaults(handler=command_reticket_ramdisk)
 
     args = parser.parse_args()
     try:

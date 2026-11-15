@@ -27,6 +27,37 @@ def image_and_ticket(image_type=b"sepi"):
 
 
 class SepTests(unittest.TestCase):
+    def test_ramdisk_bundle_uses_captured_ticket_without_changing_payloads(self):
+        image, ticket = image_and_ticket()
+        generic = der(0x30, der(0x16, b"IM4M") + der(4, b"generic"))
+        types = {"iBSS": b"ibss", "iBEC": b"ibec", "ramdisk": b"rdsk", "devicetree": b"rdtr",
+                 "trustcache": b"rtsc", "kernelcache": b"rkrn", "bootlogo": b"rlgo"}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            destination = root / "output"
+            (root / "sep").write_bytes(image)
+            (root / "ticket").write_bytes(ticket)
+            originals = {}
+            for name, kind in types.items():
+                payload = der(0x30, der(0x16, b"IM4P") + der(0x16, kind) + der(4, b"payload"))
+                originals[name] = payload
+                (source / f"{name}.img4").write_bytes(der(0x30, der(0x16, b"IMG4") + payload + der(0xA0, generic)))
+            command = [sys.executable, str(ROOT / "tools/sep_image.py"), "reticket-ramdisk",
+                       "--source", str(source), "--output", str(destination),
+                       "--sep", str(root / "sep"), "--ticket", str(root / "ticket")]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for name, payload in originals.items():
+                self.assertEqual(sep.split_image((destination / f"{name}.img4").read_bytes()), (payload, ticket))
+            self.assertEqual((root / "sep").read_bytes(), image)
+            (root / "ticket").write_bytes(generic)
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            (root / "ticket").write_bytes(ticket)
+            (source / "ramdisk.img4").write_bytes(b"bad")
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+
     def test_selects_active_and_refuses_ambiguous_or_wrong_slot(self):
         a, b = "A" * 96, "B" * 96
         paths = [f"/mnt8/{slot}/usr/standalone/firmware/sep-firmware.img4" for slot in (a, b)]

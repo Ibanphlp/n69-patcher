@@ -88,9 +88,10 @@ pwn_device() {
 # RAMDISK_SEP 非空时（由 prepare_ramdisk_sep 设置），在 bootx 前用 iBoot 的 rsepfirmware
 # 加载 SEP——A9 上不能在 ramdisk 里 seputil --load（内核卡死），只能走这条路。
 send_ramdisk_chain() {
-    local dir img name total=6 s=0 sep="${RAMDISK_SEP:-}" marker
+    local dir img name total=6 s=0 sep="${RAMDISK_SEP:-}" marker bootlogo=0
     dir="$REPO/$T_RAMDISK_DIR"
     img() { printf '%s\n' "$dir/$1.img4"; }
+    [ ! -f "$(img bootlogo)" ] || bootlogo=1
     for name in iBSS iBEC ramdisk devicetree trustcache kernelcache; do
         [ -s "$(img "$name")" ] || die "缺少 ramdisk 组件: $dir/$name.img4"
     done
@@ -105,12 +106,19 @@ send_ramdisk_chain() {
     need_dfu
     identity_guard
     [ -z "$sep" ] || verify_n69_sep_device "$sep"
+    if [ -n "$sep" ] && [ "${T_NAME:-}" = "n69-ios16" ]; then
+        local bundle="$WK/ramdisk-device-ticket"
+        python3 "$REPO/../tools/sep_image.py" reticket-ramdisk \
+            --source "$dir" --output "$bundle" --sep "$sep" --ticket "$(im4m_path)" ||
+            die "Cannot prepare the device-ticketed ramdisk; stopping before boot."
+        dir="$bundle"
+    fi
     pwn_device
     s=$(( s + 1 )); step "$s" "$total" "发送 iBSS";       irec_checked -f "$(img iBSS)"; sleep 2
     wait_irecovery_stage "after iBSS" "DFU|Recovery"
     s=$(( s + 1 )); step "$s" "$total" "发送 iBEC";       irec_checked -f "$(img iBEC)"; sleep 3
     wait_irecovery_stage "after iBEC" "Recovery"
-    if [ -f "$(img bootlogo)" ]; then
+    if [ "$bootlogo" -eq 1 ] && [ -f "$(img bootlogo)" ]; then
         irec -f "$(img bootlogo)" >/dev/null 2>&1 || true
         irec -c "setpicture 0x1" >/dev/null 2>&1 || true
         sleep 1
@@ -119,11 +127,17 @@ send_ramdisk_chain() {
     irec_checked -f "$(img ramdisk)"; irec_checked -c ramdisk; sleep 1
     s=$(( s + 1 )); step "$s" "$total" "发送 DeviceTree"
     irec_checked -f "$(img devicetree)"; irec_checked -c devicetree; sleep 1
+    if [ -n "$sep" ] && [ "${T_NAME:-}" = "n69-ios16" ]; then
+        s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
+        irec_checked -f "$sep"; irec_checked -c rsepfirmware; sleep 1
+    fi
     s=$(( s + 1 )); step "$s" "$total" "发送 TrustCache"
     irec_checked -f "$(img trustcache)"; irec_checked -c firmware; sleep 1
     if [ -n "$sep" ]; then
-        s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
-        irec_checked -f "$sep"; irec_checked -c rsepfirmware; sleep 1
+        if [ "${T_NAME:-}" != "n69-ios16" ]; then
+            s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
+            irec_checked -f "$sep"; irec_checked -c rsepfirmware; sleep 1
+        fi
         SSH_LOST_HINT="  本次 ramdisk 带 SEP 启动（${sep}）。
   若一直连不上：SEP ROM 可能拒绝了捕获的镜像，或该固件与设备不兼容。
   强制重启进 DFU 后用 N61_RAMDISK_SEP=0 ./n61.sh ramdisk 确认不带 SEP 时能否正常进入。"

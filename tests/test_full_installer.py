@@ -108,6 +108,41 @@ printf 'verify\n' >> "$TEST_LOG"
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, ["verify"])
 
+    def test_n69_reticket_and_sep_precede_trustcache(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ramdisk = root / 'ramdisk'
+            ramdisk.mkdir()
+            for name in ('iBSS', 'iBEC', 'ramdisk', 'devicetree', 'trustcache', 'kernelcache'):
+                (ramdisk / (name + '.img4')).write_bytes(b'image')
+            sep = root / 'sep.img4'
+            sep.write_bytes(b'sep')
+            script = r'''
+source "$LIB"
+need_dfu() { :; }; identity_guard() { :; }; verify_n69_sep_device() { :; }
+pwn_device() { :; }; wait_irecovery_stage() { :; }; ssh_wait() { :; }
+sleep() { :; }; step() { :; }; log() { :; }; im4m_path() { printf '%s' ticket; }
+die() { printf 'stopped\n'; exit 1; }
+python3() { printf 'reticket\n'; [ "${FAIL_BUNDLE:-0}" = 0 ]; }
+irec_checked() { printf '%s %s\n' "$1" "$2"; }
+send_ramdisk_chain
+'''
+            env = dict(os.environ, LIB=str(ROOT / 'n61-patcher-master/lib/device.sh'),
+                       REPO=str(root), T_RAMDISK_DIR='ramdisk', WK=str(root / 'work'),
+                       RAMDISK_SEP=str(sep), T_NAME='n69-ios16')
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            events = result.stdout.splitlines()
+            self.assertEqual(events[0], 'reticket')
+            self.assertLess(events.index('-c devicetree'), events.index('-c rsepfirmware'))
+            self.assertLess(events.index('-c rsepfirmware'), events.index('-c firmware'))
+            self.assertLess(events.index('-c firmware'), events.index('-c bootx'))
+            self.assertIn(str(root / 'work/ramdisk-device-ticket/iBSS.img4'), result.stdout)
+            env['FAIL_BUNDLE'] = '1'
+            failed = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertNotIn('-f ', failed.stdout)
+
     def test_ramdisk_sep_transfer_output_is_visible(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

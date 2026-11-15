@@ -1,9 +1,8 @@
 """SevenUP-style stock SEP handling.
 
-The SEP ROM accepts the complete IMG4 captured from the installed system's
-Preboot volume: the original IM4P payload plus the IM4M ticket embedded in the
-same container.  Re-wrapping an IPSW ``SEP`` IM4P with a host-extracted ticket
-is deliberately not supported here.
+The complete SEP IMG4 is captured from the installed system's Preboot volume.
+Its embedded ticket can be used to reticket other ramdisk images without
+changing their IM4P payloads; SEP firmware itself remains byte-for-byte intact.
 """
 
 from __future__ import annotations
@@ -77,6 +76,27 @@ def split_image(image: bytes) -> tuple[bytes, bytes]:
     ticket_rows = _children(ticket)
     _require(bool(ticket_rows) and ticket_rows[0][1] == b"IM4M", "Missing IM4M")
     return payload, ticket
+
+
+def _pack(tag: int, body: bytes) -> bytes:
+    length = len(body)
+    encoded = bytes([length]) if length < 128 else length.to_bytes((length.bit_length() + 7) // 8, "big")
+    if length >= 128:
+        encoded = bytes([128 | len(encoded)]) + encoded
+    return bytes([tag]) + encoded + body
+
+
+def reticket_image(image: bytes, ticket: bytes) -> bytes:
+    payload, _ = split_image(image)
+    ticket_rows = _children(ticket)
+    _require(bool(ticket_rows) and ticket_rows[0][1] == b"IM4M", "Invalid replacement IM4M")
+    result = _pack(0x30, b"".join(
+        _pack(0xA0, ticket) if tag == 0xA0 else raw
+        for tag, _, raw in _children(image)
+    ))
+    new_payload, new_ticket = split_image(result)
+    _require(new_payload == payload and new_ticket == ticket, "Reticket validation failed")
+    return result
 
 
 def im4p_type(payload: bytes) -> str:
