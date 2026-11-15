@@ -9,6 +9,18 @@ irec_checked() {
 
 device_query() { irec -q 2>/dev/null || true; }
 
+verify_n69_sep_device() {
+    local image="$1" source="$REPO/../state/sep-firmware.img4" ticket img4tool_bin probe
+    [ "${T_NAME:-}" = "n69-ios16" ] || return 0
+    [ -s "$source" ] && cmp -s "$image" "$source" || die "SEP is not the complete captured Preboot image"
+    ticket="$(im4m_path)" || die "Missing captured IM4M"
+    img4tool_bin="$REPO/../ramdisk-main/Darwin/img4tool"
+    [ -x "$img4tool_bin" ] || img4tool_bin="$(tool img4tool)" || die "img4tool unavailable"
+    probe="$(irec -q)" || die "Cannot read recovery device identity"
+    printf '%s\n' "$probe" | python3 "$REPO/../tools/sep_image.py" verify-device --image "$image" --img4tool "$img4tool_bin" --expect-ticket "$ticket" ||
+        die "Captured SEP does not match the connected device"
+}
+
 # Poll enumeration rather than assuming a fixed USB reset delay.
 wait_irecovery_stage() {
     local label="$1" mode="$2" q attempt
@@ -92,6 +104,7 @@ send_ramdisk_chain() {
 
     need_dfu
     identity_guard
+    [ -z "$sep" ] || verify_n69_sep_device "$sep"
     pwn_device
     s=$(( s + 1 )); step "$s" "$total" "发送 iBSS";       irec_checked -f "$(img iBSS)"; sleep 2
     wait_irecovery_stage "after iBSS" "DFU|Recovery"
@@ -112,7 +125,7 @@ send_ramdisk_chain() {
         s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
         irec_checked -f "$sep" >/dev/null; irec_checked -c rsepfirmware >/dev/null; sleep 1
         SSH_LOST_HINT="  本次 ramdisk 带 SEP 启动（${sep}）。
-  若一直连不上：SEP ROM 可能拒绝了镜像（IM4M 与 ${T_BUILD_N69:-IPSW} 的 SEP 不匹配）。
+  若一直连不上：SEP ROM 可能拒绝了捕获的镜像，或该固件与设备不兼容。
   强制重启进 DFU 后用 N61_RAMDISK_SEP=0 ./n61.sh ramdisk 确认不带 SEP 时能否正常进入。"
     fi
     s=$(( s + 1 )); step "$s" "$total" "发送 KernelCache + bootx"
@@ -155,6 +168,7 @@ send_boot_chain() {
     fi
     need_dfu
     identity_guard
+    [ "${T_NAME:-}" != "n69-ios16" ] || verify_n69_sep_device "$SEP"
     cpid="$(device_query | awk '/CPID/ {print $2}')"
 
     step 1 8 "准备 DFU（gaster pwn/reset）"

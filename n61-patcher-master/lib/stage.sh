@@ -148,6 +148,44 @@ stage_ramdisk() {
     send_ramdisk_chain
 }
 
+# ---------- capture-sep ----------
+stage_capture_sep() {
+    local root="$REPO/.." mount="${PREBOOT_MNT:-/mnt8}" slot active candidates source tmp img4tool_bin
+    local -a select_args
+    [ "${T_NAME:-}" = "n69-ios16" ] || die "capture-sep 仅支持 n69-ios16"
+    if dry; then log "dry-run: skip Preboot SEP capture"; return 0; fi
+    ssh_ensure
+    slot="$(preboot_slot)" || die "Cannot find the Preboot volume"
+    rsh "test -d $mount" || die "Preboot mount point does not exist: $mount"
+    rsh "m=\$(/sbin/mount | /usr/bin/grep -F ' on $mount ' || true); [ -z \"\$m\" ] || printf '%s\n' \"\$m\" | /usr/bin/grep -Fq '/dev/disk0s1s${slot} on $mount '" ||
+        die "Preboot mount point is occupied by another filesystem"
+    mount_vol "$slot" "$mount" ro || die "Cannot mount Preboot"
+    active="$(ssh_run_timeout 30 "if [ -f $mount/active ]; then /bin/cat $mount/active; fi")" || die "Cannot read Preboot active slot"
+    candidates="$(ssh_run_timeout 90 "/usr/bin/find $mount -name sep-firmware.img4 -type f")" || die "Cannot enumerate Preboot SEP images"
+    select_args=(select --mount "$mount" --active "$active" --stdin)
+    [ -z "${N69_PREBOOT_HASH:-}" ] || select_args+=(--requested "$N69_PREBOOT_HASH")
+    source="$(printf '%s\n' "$candidates" | python3 "$root/tools/sep_image.py" "${select_args[@]}")" || die "Cannot select a unique Preboot SEP image"
+    img4tool_bin="$root/ramdisk-main/Darwin/img4tool"
+    [ -x "$img4tool_bin" ] || img4tool_bin="$(tool img4tool)" || die "img4tool unavailable"
+    mkdir -p "$root/state" || die "Cannot create state directory"
+    tmp="$(umask 077; mktemp -d "$root/state/.sep-capture.XXXXXXXX")" || die "Cannot create private capture directory"
+    if ! ssh_run_timeout 90 "/bin/cat '$source'" >"$tmp/sep-firmware.img4"; then
+        rm -rf "$tmp"
+        die "SEP download failed; existing capture was not changed"
+    fi
+    if ! python3 "$root/tools/sep_image.py" validate --image "$tmp/sep-firmware.img4" \
+        --source "$source" --mount "$mount" --img4tool "$img4tool_bin" \
+        --ticket-out "$tmp/IM4M.bin" --receipt-out "$tmp/sep-capture.json"; then
+        rm -rf "$tmp"
+        die "SEP validation failed; existing capture was not changed"
+    fi
+    mv -f "$tmp/sep-firmware.img4" "$root/state/sep-firmware.img4" || die "Cannot install SEP capture: $tmp"
+    mv -f "$tmp/IM4M.bin" "$root/state/IM4M.bin" || die "Cannot install SEP ticket: $tmp"
+    mv -f "$tmp/sep-capture.json" "$root/state/sep-capture.json" || die "Cannot install SEP receipt: $tmp"
+    rmdir "$tmp" || die "Cannot remove capture directory: $tmp"
+    ok "Captured complete Preboot SEP and embedded IM4M in $root/state"
+}
+
 # ---------- extract-im4m ----------
 # v0-n69-onboard-extraction-fix-v1
 stage_extract_im4m_n69() {
@@ -186,7 +224,7 @@ stage_extract_im4m_n69() {
 
 stage_extract_im4m() {
     if [ "${T_NAME:-}" = "n69-ios16" ]; then
-        stage_extract_im4m_n69
+        stage_capture_sep
         return $?
     fi
     local disk2 out size
@@ -521,24 +559,23 @@ build_ibec() {   # out
         die "iBEC 签名失败"
 }
 
-# SEP：从本机原生 IPSW（N69AP 15.8.8）取 SEP，打成 rsep 并附上本机 IM4M。
-# SEP ROM 自己校验签名（不受 checkm8/gaster 影响）：没有 IM4M 的镜像会被拒绝。
-# 同一个镜像既用于 iOS16 启动链，也用于 ramdisk 启动时由 iBoot 加载 SEP。
+# Reuse the complete personalized IMG4 captured from the stock Preboot volume.
 build_sep() {   # out
-    local component="$WK/SEP.n69ap.im4p" im4m
+    local source="$REPO/../state/sep-firmware.img4" im4m tmp
     [ "${T_NAME:-}" = "n69-ios16" ] || die "当前 target 未声明 SEP 来源"
-    im4m="$(im4m_path)" || die "缺少 IM4M（先跑 ./n61.sh extract-im4m）：SEP 必须用本机 IM4M 个性化"
-    mkdir -p "$WK"
-    python3 "$REPO/tools/native_component.py" "$REPO/ipsw/$T_IPSW_N69" \
-        n69ap "$T_BUILD_N69" SEP "$component" || die "无法提取 N69 SEP 固件"
-    "$(tool img4)" -i "$component" -T rsep -M "$im4m" -o "$1" >/dev/null || die "SEP 打包失败"
-    [ -s "$1" ] || die "SEP 镜像为空"
+    [ -s "$source" ] || die "Missing captured Preboot SEP: run ./n61.sh capture-sep --target n69-ios16"
+    im4m="$(im4m_path)" || die "Missing captured IM4M"
+    python3 "$REPO/../tools/sep_image.py" validate --image "$source" --expect-ticket "$im4m" || die "Captured SEP and IM4M do not match"
+    tmp="$1.tmp.$$"
+    (umask 077; cp "$source" "$tmp") || die "Cannot copy captured SEP"
+    cmp -s "$source" "$tmp" || { rm -f "$tmp"; die "Captured SEP changed during copy"; }
+    mv -f "$tmp" "$1" || { rm -f "$tmp"; die "Cannot publish SEP image"; }
 }
 
 # ramdisk 启动时让 iBoot 加载 SEP（rsepfirmware）。
 # 原因：A9 上在 ramdisk 里执行 seputil --load 会让内核卡死（SSHRD_Script #319），
 # 而 iBoot 在 bootx 之前加载 SEP 是 restore/正常启动走的原生路径。
-# N61_RAMDISK_SEP: auto（默认，有 IM4M 就带）| 1（必须带）| 0（不带）| /path/to/sep.img4
+# N61_RAMDISK_SEP: auto（默认，存在已捕获 SEP 时加载）| 1（必须带）| 0（不带）| /path/to/sep.img4
 prepare_ramdisk_sep() {
     local mode="${N61_RAMDISK_SEP:-auto}" out im4m
     RAMDISK_SEP=""
@@ -557,19 +594,16 @@ prepare_ramdisk_sep() {
         case "$mode" in 1|yes|on) die "当前 target 没有 SEP 来源，无法让 ramdisk 带 SEP" ;; esac
         return 0
     fi
-    if ! im4m="$(im4m_path 2>/dev/null)" || [ -z "$im4m" ]; then
+    if [ ! -s "$REPO/../state/sep-firmware.img4" ]; then
         case "$mode" in
-            1|yes|on) die "N61_RAMDISK_SEP=1 但还没有 IM4M：先不带 SEP 进 ramdisk 跑 extract-im4m" ;;
+            1|yes|on) die "No captured SEP: boot without SEP and run ./n61.sh capture-sep --target n69-ios16" ;;
         esac
-        warn "还没有 IM4M（state/IM4M.bin）：本次 ramdisk 不带 SEP。"
-        warn "  先跑 extract-im4m；需要加密 DataB 时重新进 DFU 再跑 ramdisk，届时会自动带上 SEP。"
+        warn "No captured Preboot SEP; starting ramdisk without SEP. Run capture-sep before the next boot."
         return 0
     fi
     out="$WK/ramdisk_SEP.img4"
-    if [ ! -s "$out" ] || [ "$im4m" -nt "$out" ] || [ "$REPO/lib/stage.sh" -nt "$out" ]; then
-        log "构建 ramdisk 用 SEP（N69AP ${T_BUILD_N69:-?} rsep + 本机 IM4M）…"
-        build_sep "$out"
-    fi
+    log "Reusing complete captured Preboot SEP for ramdisk…"
+    build_sep "$out"
     RAMDISK_SEP="$out"
 }
 
@@ -673,8 +707,8 @@ stage_boot() {
     for n in iBSS iBEC DT TC KC; do
         [ -f "$WK/boot_$n.img4" ] || missing=1
     done
-    if [ "${T_NAME:-}" = "n69-ios16" ] && { [ ! -s "$WK/boot_SEP.img4" ] || [ "$REPO/lib/stage.sh" -nt "$WK/boot_SEP.img4" ]; }; then
-        missing=1
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        build_sep "$WK/boot_SEP.img4"
     fi
     if [ "$missing" -eq 1 ]; then
         log "缺少启动组件，先构建…"

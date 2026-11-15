@@ -61,7 +61,10 @@ derived_path() {
 # IM4M（刷机后重提，build 签名用）
 im4m_path() {
     local p="$REPO/state/IM4M.bin"
-    [ -f "$p" ] || die "缺少 state/IM4M.bin：请先运行 ./n61.sh extract-im4m"
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        p="$REPO/../state/IM4M.bin"
+    fi
+    [ -s "$p" ] || die "缺少 IM4M：请先运行 ./n61.sh extract-im4m --target ${T_NAME:-n61-ios13}"
     printf '%s\n' "$p"
 }
 

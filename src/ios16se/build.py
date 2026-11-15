@@ -449,6 +449,22 @@ def validate_captured_sep(config: BuildConfig, im4m: Path) -> tuple[Path, captur
     return source, image
 
 
+def verify_sep_for_device(config: BuildConfig, im4m: Path, output: Path, probe: str) -> None:
+    """Reject altered SEP images and tickets belonging to another device."""
+
+    source, image = validate_captured_sep(config, im4m)
+    try:
+        if output.read_bytes() != source.read_bytes():
+            raise BuildError("Boot SEP differs from the captured Preboot image")
+        ecid, cpid = captured_sep.parse_irecovery_identity(probe)
+        captured_sep.validate_identity(
+            image.ticket, expected_ecid=ecid, expected_cpid=cpid,
+            img4tool=config.tools.get("img4tool", "ramdisk-main/Darwin/img4tool"),
+        )
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise BuildError(f"Cannot verify SEP against the connected device: {error}") from error
+
+
 def build_sep(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     """Copy the complete Preboot IMG4 unchanged; never repackage IPSW SEP."""
 
@@ -704,6 +720,7 @@ def boot_flow(artifacts: BuildArtifacts, config: BuildConfig) -> int:
     probe_output = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0 or "n69ap" not in probe_output.lower():
         raise BuildError(f"Device is not N69AP in DFU mode: {probe_output.strip()}")
+    verify_sep_for_device(config, artifacts.im4m, artifacts.sep, probe_output)
 
     # Pwn if needed
     if "PWND" not in result.stdout:

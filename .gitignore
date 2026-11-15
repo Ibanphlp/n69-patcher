@@ -7,6 +7,9 @@ artifacts/
 work/
 state/IM4M.bin
 state/*.bin
+state/sep-firmware.img4
+state/sep-capture.json
+state/.sep-capture.*/
 
 # Python
 __pycache__/

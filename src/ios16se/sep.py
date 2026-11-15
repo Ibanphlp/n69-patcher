@@ -69,17 +69,19 @@ def split_image(image: bytes) -> tuple[bytes, bytes]:
         "Expected an IMG4 containing IM4P and IM4M",
     )
     payload = top[1][2]
-    _require(_children(payload)[0][1] == b"IM4P", "Missing IM4P")
+    payload_rows = _children(payload)
+    _require(bool(payload_rows) and payload_rows[0][1] == b"IM4P", "Missing IM4P")
     tickets = [item for item in top if item[0] == 0xA0]
     _require(len(tickets) == 1, "Expected exactly one IM4M wrapper")
     ticket = tickets[0][1]
-    _require(_children(ticket)[0][1] == b"IM4M", "Missing IM4M")
+    ticket_rows = _children(ticket)
+    _require(bool(ticket_rows) and ticket_rows[0][1] == b"IM4M", "Missing IM4M")
     return payload, ticket
 
 
 def im4p_type(payload: bytes) -> str:
     rows = _children(payload)
-    _require(rows[0][1] == b"IM4P" and len(rows[1][1]) == 4, "Invalid IM4P type")
+    _require(len(rows) >= 2 and rows[0][1] == b"IM4P" and len(rows[1][1]) == 4, "Invalid IM4P type")
     return rows[1][1].decode("ascii")
 
 
@@ -177,6 +179,15 @@ def parse_img4tool_identity(text: str) -> tuple[int, int]:
     return int(ecid.group(1), 0), int(chip.group(1), 0)
 
 
+def parse_irecovery_identity(text: str) -> tuple[int, int]:
+    """Read the connected recovery device's ECID and CPID."""
+
+    ecid = re.search(r"(?im)^\s*ECID:\s*(0[xX][0-9A-Fa-f]+|\d+)\b", text)
+    chip = re.search(r"(?im)^\s*CPID:\s*(0[xX][0-9A-Fa-f]+|\d+)\b", text)
+    _require(ecid is not None and chip is not None, "Recovery device identity is missing ECID or CPID")
+    return int(ecid.group(1), 0), int(chip.group(1), 0)
+
+
 def ticket_identity(ticket: bytes, img4tool: str | Path) -> tuple[int, int]:
     """Validate a ticket with img4tool and return its ECID and CPID."""
 
@@ -205,7 +216,7 @@ def validate_identity(
 ) -> tuple[int, int] | None:
     """Check the ticket against the live device identity when requested."""
 
-    if expected_ecid is None and expected_cpid is None:
+    if expected_ecid is None and expected_cpid is None and img4tool is None:
         return None
     _require(img4tool is not None, "img4tool is required to verify the SEP ticket identity")
     actual_ecid, actual_cpid = ticket_identity(ticket, img4tool)

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from ios16se.build import (
-    BuildConfig, load_config, build_all, boot_flow, validate_boot_images, BuildError
+    BuildConfig, load_config, build_all, boot_flow, validate_boot_images, verify_sep_for_device, BuildError
 )
 
 
@@ -339,6 +339,13 @@ def send_boot_chain(config: BootConfig) -> bool:
         UI.error(f"  irecovery output: {probe_output.strip()}")
         return False
 
+    try:
+        verify_sep_for_device(load_config(Path("profiles/n69ap_ios16.toml")), config.im4m_path,
+                              Path("artifacts/boot/sep.img4"), probe_output)
+    except (BuildError, OSError, ValueError) as error:
+        UI.error(str(error))
+        return False
+
     if "PWND" not in probe_output:
         UI.substep("Device not pwned, running gaster pwn...")
         run_with_spinner([str(gaster), "pwn"], "Exploiting checkm8 (gaster pwn)")
@@ -423,7 +430,7 @@ def main():
     # Preflight
     if not config.im4m_path.exists():
         UI.error(f"IM4M not found: {config.im4m_path}")
-        print("    Run ./run_boot.sh or extract IM4M from NOR dump")
+        print("    Capture the Preboot SEP and its embedded ticket with ./n61.sh capture-sep --target n69-ios16")
         sys.exit(1)
 
     if not preflight_check(config):

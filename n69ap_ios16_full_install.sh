@@ -96,10 +96,10 @@ echo ""
 echo -e "${CYAN}━━━ IM4M ━━━${NC}"
 # The IM4M is the APTicket for THIS device (ECID-bound). It cannot be read from
 # the host: /dev/disk2 on the Mac is a host disk, not the phone's NOR.
-# Re-extract it with the SSH ramdisk: ./n61.sh extract-im4m --target n69-ios16
+# Capture the embedded IM4M with the full SEP image from the SSH ramdisk Preboot.
 if [[ $(stat -f%z "$IM4M" 2>/dev/null || stat -c%s "$IM4M") -lt 1000 ]]; then
     echo -e "${RED}[✗]${NC} $IM4M is too small to be a valid IM4M"
-    echo "    Run: ./n61.sh ramdisk --target n69-ios16 && ./n61.sh extract-im4m --target n69-ios16"
+    echo "    Boot the SSH ramdisk without SEP, then run: ./n61.sh capture-sep --target n69-ios16"
     exit 1
 fi
 echo -e "${GREEN}[✓]${NC} Using existing IM4M ($(stat -f%z "$IM4M" 2>/dev/null || stat -c%s "$IM4M") bytes)"
@@ -196,6 +196,8 @@ read -p "Press Enter when device is in DFU mode..." -r
 
 # Check if pwned
 PROBE=$("$IRECOVERY" -q 2>&1 || true)
+cmp -s state/sep-firmware.img4 artifacts/boot/sep.img4 || { echo "Boot SEP differs from the Preboot capture" >&2; exit 1; }
+printf '%s\n' "$PROBE" | python3 tools/sep_image.py verify-device --image artifacts/boot/sep.img4 --expect-ticket "$IM4M" --img4tool ramdisk-main/Darwin/img4tool || exit 1
 if [[ "$PROBE" != *"PWND"* ]]; then
     echo "  Device not pwned, running gaster pwn..."
     "$GASTER" pwn

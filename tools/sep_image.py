@@ -15,6 +15,7 @@ from ios16se.sep import (  # noqa: E402
     SepError,
     atomic_write,
     preboot_hash_from_path,
+    parse_irecovery_identity,
     receipt,
     select_sep,
     validate_identity,
@@ -89,6 +90,16 @@ def command_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_verify_device(args: argparse.Namespace) -> int:
+    image = validate_image(Path(args.image).read_bytes())
+    if args.expect_ticket and image.ticket != Path(args.expect_ticket).read_bytes():
+        raise SepError("Captured SEP ticket does not match the requested IM4M file")
+    ecid, cpid = parse_irecovery_identity(sys.stdin.read())
+    validate_identity(image.ticket, expected_ecid=ecid, expected_cpid=cpid, img4tool=args.img4tool)
+    print("SEP ticket matches the connected recovery device")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -113,6 +124,12 @@ def main() -> int:
     validate.add_argument("--cpid", help="expected live CPID (decimal or 0x-prefixed)")
     validate.add_argument("--img4tool", help="img4tool path for ticket identity validation")
     validate.set_defaults(handler=command_validate)
+
+    verify = subparsers.add_parser("verify-device", help="check the embedded ticket against irecovery -q on stdin")
+    verify.add_argument("--image", required=True)
+    verify.add_argument("--img4tool", required=True)
+    verify.add_argument("--expect-ticket")
+    verify.set_defaults(handler=command_verify_device)
 
     args = parser.parse_args()
     try:

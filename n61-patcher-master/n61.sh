@@ -3,7 +3,8 @@
 #
 # 阶段：
 #   ramdisk        进 iOS12.5.8 SSH ramdisk（DFU→gaster→发送 SSHRD 链→SSH 就绪）
-#   extract-im4m   刷机后重提本机 IM4M（读 NOR）→ state/IM4M.bin   [需 ramdisk]
+#   extract-im4m   提取本机 IM4M；N69 从 Preboot SEP 捕获
+#   capture-sep    捕获 N69 Preboot 中完整 SEP IMG4 及其中的 IM4M [需 ramdisk]
 #   volumes        建 s4 SystemB / s5 DataB（role 0）              [需 ramdisk]
 #   rootfs         把 iOS13.7 rootfs 流式写入 s4（~25 分钟）        [需 ramdisk + sudo]
 #   cryptex        iOS16 SystemOS Cryptex 写入 s4 + Preboot 链接 [需 ramdisk + sudo]
@@ -117,7 +118,7 @@ done
 
 [ -n "$STAGE" ] || { usage; exit 1; }
 case "$STAGE" in
-    ramdisk|extract-im4m|volumes|rootfs|cryptex|preboot|patch-rootfs|fix-icons|build|boot|install|all|status|list) ;;
+    ramdisk|extract-im4m|capture-sep|volumes|rootfs|cryptex|preboot|patch-rootfs|fix-icons|build|boot|install|all|status|list) ;;
     *) die "未知阶段: ${STAGE}（--help 查看用法）" ;;
 esac
 
@@ -310,6 +311,7 @@ case "$STAGE" in
     status)       stage_status ;;
     ramdisk)      stage_ramdisk ;;
     extract-im4m) stage_extract_im4m ;;
+    capture-sep)  stage_capture_sep ;;
     volumes)      stage_volumes ;;
     rootfs)       stage_rootfs ;;
     cryptex)      stage_cryptex ;;

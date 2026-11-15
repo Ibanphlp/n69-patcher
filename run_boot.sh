@@ -48,7 +48,7 @@ IM4M="state/IM4M.bin"
 # 1. Ensure IM4M exists
 if [ ! -f "$IM4M" ]; then
     echo "ERROR: IM4M missing at $IM4M."
-    echo "       Extract it via SSH ramdisk or ./ios16se extract-im4m <nor_dump> $IM4M"
+    echo "       Capture the complete Preboot SEP and its embedded ticket with ./n61.sh capture-sep --target n69-ios16"
     exit 1
 fi
 

@@ -55,25 +55,12 @@ echo ""
 echo "[3/4] Checking IM4M..."
 
 IM4M="state/IM4M.bin"
-if [[ ! -f "$IM4M" ]] || [[ $(stat -f%z "$IM4M" 2>/dev/null || stat -c%s "$IM4M") -lt 1000 ]]; then
-    echo "  Extracting IM4M via SSH ramdisk..."
-
-    # Put device in DFU and pwn
-    tools/SSHRD_Script/Darwin/gaster pwn 2>/dev/null || true
-    tools/SSHRD_Script/Darwin/gaster reset
-    sleep 3
-
-    # Wait for SSH
-    for i in {1..5}; do
-        if ssh -o ConnectTimeout=1 -o StrictHostKeyChecking=no -p 2222 root@localhost "exit" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-
-    # Extract IM4M
-    dd if=/dev/disk2 bs=256k count=256 2>/dev/null | tools/SSHRD_Script/Darwin/img4 -i - -m "$IM4M"
+if [[ ! -s "$IM4M" || ! -s state/sep-firmware.img4 ]]; then
+    echo "  Missing captured Preboot SEP and embedded IM4M."
+    echo "  Boot the SSH ramdisk without SEP, then run: ./n61.sh capture-sep --target n69-ios16"
+    exit 1
 fi
+python3 tools/sep_image.py validate --image state/sep-firmware.img4 --expect-ticket "$IM4M" || exit 1
 
 if [[ -f "$IM4M" ]]; then
     echo "  ✓ IM4M ready ($(stat -f%z "$IM4M") bytes)"
@@ -142,6 +129,8 @@ fi
 
 # Check if pwned
 PROBE=$("$IRECOVERY" -q 2>&1 || true)
+cmp -s state/sep-firmware.img4 artifacts/boot/sep.img4 || { echo "Boot SEP differs from the Preboot capture" >&2; exit 1; }
+printf '%s\n' "$PROBE" | python3 tools/sep_image.py verify-device --image artifacts/boot/sep.img4 --expect-ticket "$IM4M" --img4tool ramdisk-main/Darwin/img4tool || exit 1
 if [[ "$PROBE" != *"PWND"* ]]; then
     echo "  Device not pwned, running gaster pwn..."
     "$GASTER" pwn

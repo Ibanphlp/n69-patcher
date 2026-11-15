@@ -88,12 +88,10 @@ Run `./n69ap_mac_setup.sh` first to download macOS tools.
 - Try different USB cable
 
 ### "IM4M not found"
-After setup, put device in DFU and run gaster extraction:
+Boot the stock SSH ramdisk without SEP and capture the image and its embedded ticket from Preboot:
 ```bash
-./ramdisk-main/Darwin/gaster pwn
-./ramdisk-main/Darwin/gaster reset
-sleep 3
-dd if=/dev/disk2 bs=256 count=16384 2>/dev/null | ./ramdisk-main/Darwin/img4 -i - -m state/IM4M.bin
+N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
+./n61.sh capture-sep --target n69-ios16
 ```
 
 ### "SSH ramdisk not ready"

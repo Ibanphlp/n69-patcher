@@ -21,12 +21,13 @@ DFU Mode → gaster pwn → iBSS → iBEC → DeviceTree → TrustCache → SEP 
 - `iPhone_4.0_64bit_15.8.8_19H422_Restore.ipsw` (N69AP SE 15.8.8)
 - `iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw` (J96 iPad 5 16.7.16)
 
-### IM4M Ticket
-Extract from NOR via SSH ramdisk:
+### SEP and IM4M
+Boot the stock SSH ramdisk without SEP, then capture the complete image and its embedded ticket from Preboot:
 ```bash
-# After entering ramdisk via gaster:
-dd if=/dev/disk2 bs=256 count=16384 | ./ramdisk-main/Linux/img4 -i - -m state/IM4M.bin
+N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
+./n61.sh capture-sep --target n69-ios16
 ```
+If multiple slots are present, set `N69_PREBOOT_HASH` to the desired 96-character Preboot slot hash.
 
 ## Usage
 
