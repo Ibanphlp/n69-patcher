@@ -32,6 +32,7 @@ except ImportError:
 from typing import Optional
 
 from .img4_tool import Img4Tool, get_img4_tool
+from .img4 import Im4pError, inspect as inspect_im4p
 from . import sep as captured_sep
 from .kc_patch import apply_patches
 from .manifest import inventory, find_identity, extract_component

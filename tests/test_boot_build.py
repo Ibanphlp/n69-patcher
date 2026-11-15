@@ -3,10 +3,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from ios16se.build import decrypt_iboot, verify_kc_roundtrip, BuildError
+from ios16se.build import build_devicetree, decrypt_iboot, verify_kc_roundtrip, BuildError
 from ios16se.kc_patch import RemoveIpadDriversPatch, apply_patches
 from ios16se.sevenup.kc import plist
 from ios16se.append_wt_fix import extract_watchtower_tail
@@ -43,6 +44,53 @@ class BuildTests(unittest.TestCase):
                 self.assertNotEqual(a.read_bytes(), b.read_bytes())
                 decrypt_iboot(ibss, ibec, work, tool, tool, 'n69ap', tool)
                 self.assertEqual(len(calls), 2)
+
+    def test_devicetree_inspects_im4p_and_rejects_invalid_inputs(self):
+        def der(tag, data):
+            return bytes((tag, len(data))) + data
+
+        def im4p(kind):
+            fields = (der(0x16, b'IM4P'), der(0x16, kind),
+                      der(0x16, b'device tree'), der(0x04, b'native tree'))
+            return der(0x30, b''.join(fields))
+
+        class FakeImg4:
+            def extract(self, source, output):
+                if Path(source).suffix == '.im4p':
+                    Path(output).write_bytes(b'native tree')
+                else:
+                    Path(output).write_bytes(Path(source).read_bytes())
+
+            def sign(self, source, output, kind, description):
+                self_kind_and_description = (kind, description)
+                if self_kind_and_description != ('rdtr', 'DeviceTree'):
+                    raise AssertionError(self_kind_and_description)
+                Path(output).write_bytes(Path(source).read_bytes())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / 'boot' / 'devicetree.img4'
+            config = SimpleNamespace(output={'boot_dt': str(output)},
+                                     component_sources={'boot_chain': 'target'})
+            source_data = [im4p(b'dtre')]
+            def extract(_ipsw, _board, _component, dest):
+                dest.write_bytes(source_data[0])
+            tree = SimpleNamespace(root=object())
+            def property_value(_root, name):
+                return {'compatible': b'N69AP\0iPhone8,4\0', 'model': b'iPhone8,4\0'}[name]
+            with patch('ios16se.build.get_ipsw_path', return_value=root / 'target.ipsw'), \
+                 patch('ios16se.build.extract_ipsw_component', side_effect=extract), \
+                 patch('ios16se.build.get_img4_tool', return_value=FakeImg4()), \
+                 patch('ios16se.build.inspect_devicetree', return_value=tree), \
+                 patch('ios16se.devicetree.property_value', side_effect=property_value):
+                self.assertEqual(build_devicetree(config, root, root / 'ticket'), output)
+                self.assertEqual(output.read_bytes(), b'native tree')
+                for bad, message in ((b'invalid', 'not a valid IM4P'),
+                                     (im4p(b'krnl'), 'unexpected IM4P type')):
+                    source_data[0] = bad
+                    with self.assertRaisesRegex(BuildError, message):
+                        build_devicetree(config, root, root / 'ticket')
+                    self.assertEqual(output.read_bytes(), b'native tree')
 
     def test_unvalidated_hardware_fails_closed(self):
         with self.assertRaisesRegex(RuntimeError, 'Unvalidated'):
