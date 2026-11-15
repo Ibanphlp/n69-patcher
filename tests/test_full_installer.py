@@ -177,25 +177,61 @@ send_ramdisk_chain
             self.assertIn('transfer-output', result.stdout)
             self.assertIn('command-output', result.stdout)
 
-    def test_failed_sep_ping_reports_uncertainty_and_stops(self):
+    def run_sep_fallback(self, scenario):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            (root / 'project').mkdir()
+            (root / 'state').mkdir()
+            (root / 'state/sep-firmware.img4').write_bytes(b'captured firmware')
             (root / '.ramdisk-sep-sent').write_text('captured-sep.img4')
             script = r'''
 source "$LIB"
-sep_ping_ok() { return 1; }
-log() { :; }
-sleep() { :; }
+log() { :; }; warn() { :; }; sleep() { :; }
 die() { printf '%s\n' "$*" >&2; exit 1; }
+preboot_mount() { :; }
+ssh_ensure() { [ "$SCENARIO" != disconnect ]; }
+sep_ping_ok() { [ -f "$WK/loaded" ] && [ "$SCENARIO" = success ]; }
+python3() { if [ "$1" = -c ]; then command python3 "$@"; else cat >/dev/null; [ "$SCENARIO" != ambiguous ] || return 1; printf '%s\n' '/mnt8/slot/usr/standalone/firmware/sep-firmware.img4'; fi; }
+ssh_run_timeout() {
+    case "$2" in
+        *'/active'*) : ;;
+        *'/usr/bin/find'*) printf '%s\n' '/mnt8/slot/usr/standalone/firmware/sep-firmware.img4' ;;
+        *'/bin/cat'*) if [ "$SCENARIO" = mismatch ]; then printf 'other firmware'; else printf 'captured firmware'; fi ;;
+        *'seputil --load'*) printf 'load\n' >> "$WK/events"; touch "$WK/loaded"; [ "$SCENARIO" != disconnect ] ;;
+        *) return 1 ;;
+    esac
+}
 ensure_sep
-echo unexpected-continued
+printf 'continued\n' >> "$WK/events"
 '''
-            env = dict(os.environ, LIB=str(ROOT / 'n61-patcher-master/lib/ssh.sh'), WK=str(root))
-            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('cause is unknown', result.stderr)
-            self.assertIn('Do not use seputil --load on A9', result.stderr)
-            self.assertNotIn('unexpected-continued', result.stdout)
+            env = dict(os.environ, LIB=str(ROOT / 'n61-patcher-master/lib/ssh.sh'),
+                       WK=str(root), REPO=str(root / 'project'), T_NAME='n69-ios16',
+                       SCENARIO=scenario)
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True, timeout=10)
+            events = (root / 'events').read_text().splitlines() if (root / 'events').exists() else []
+            return result, events
+
+    def test_n69_load_fallback_continues_only_after_successful_ping(self):
+        result, events = self.run_sep_fallback('success')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(events, ['load', 'continued'])
+
+    def test_n69_load_fallback_stops_if_ping_still_fails(self):
+        result, events = self.run_sep_fallback('ping_failure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ['load'])
+
+    def test_n69_load_fallback_stops_when_ssh_disconnects(self):
+        result, events = self.run_sep_fallback('disconnect')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ['load'])
+
+    def test_n69_load_fallback_rejects_unmatched_or_ambiguous_firmware(self):
+        for scenario in ('mismatch', 'ambiguous'):
+            with self.subTest(scenario=scenario):
+                result, events = self.run_sep_fallback(scenario)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(events, [])
 
 
 if __name__ == "__main__":
