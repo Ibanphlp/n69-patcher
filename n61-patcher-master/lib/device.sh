@@ -123,7 +123,7 @@ send_ramdisk_chain() {
     irec_checked -f "$(img trustcache)"; irec_checked -c firmware; sleep 1
     if [ -n "$sep" ]; then
         s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
-        irec_checked -f "$sep" >/dev/null; irec_checked -c rsepfirmware >/dev/null; sleep 1
+        irec_checked -f "$sep"; irec_checked -c rsepfirmware; sleep 1
         SSH_LOST_HINT="  本次 ramdisk 带 SEP 启动（${sep}）。
   若一直连不上：SEP ROM 可能拒绝了捕获的镜像，或该固件与设备不兼容。
   强制重启进 DFU 后用 N61_RAMDISK_SEP=0 ./n61.sh ramdisk 确认不带 SEP 时能否正常进入。"

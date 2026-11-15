@@ -337,11 +337,10 @@ ensure_sep() {
                 return 0
             fi
         done
-        die "ramdisk 带 SEP 启动（$(cat "$marker" 2>/dev/null)），但 seputil --ping 仍失败。
-  SEP ROM 很可能拒绝了镜像：
-    - 确认 state/IM4M.bin 是本机当前系统的 IM4M（不确定就重跑 extract-im4m，ramdisk_SEP.img4 会自动重建）；
-    - 确认 ipsw/${T_IPSW_N69:-<N69 IPSW>} 与设备已装系统同一版本（${T_BUILD_N69:-?}）。
-  已中止，APFS 卷未被改动。"
+        die "SEP image was sent before ramdisk boot ($(cat "$marker" 2>/dev/null)), but seputil --ping still fails.
+  A successful transfer or matching device identity does not prove SEP accepted or started the image.
+  The cause is unknown; inspect the SEP transfer output, ramdisk configuration, and firmware compatibility.
+  Do not use seputil --load on A9 or bypass this check. Stopping before continuing."
     fi
 
     if device_is_a9 && [ "${N61_FORCE_SEPUTIL_LOAD:-0}" != "1" ]; then

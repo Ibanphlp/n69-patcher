@@ -108,6 +108,60 @@ printf 'verify\n' >> "$TEST_LOG"
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(events, ["verify"])
 
+    def test_ramdisk_sep_transfer_output_is_visible(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ramdisk = root / 'ramdisk'
+            ramdisk.mkdir()
+            for name in ('iBSS', 'iBEC', 'ramdisk', 'devicetree', 'trustcache', 'kernelcache'):
+                (ramdisk / (name + '.img4')).write_bytes(b'image')
+            sep = root / 'captured-sep.img4'
+            sep.write_bytes(b'sep')
+            script = r'''
+source "$LIB"
+need_dfu() { :; }
+identity_guard() { :; }
+verify_n69_sep_device() { :; }
+pwn_device() { :; }
+wait_irecovery_stage() { :; }
+ssh_wait() { :; }
+sleep() { :; }
+step() { :; }
+log() { :; }
+irec_checked() {
+    if [[ "$1" == -f && "$2" == "$RAMDISK_SEP" ]]; then echo transfer-output; fi
+    if [[ "$1" == -c && "$2" == rsepfirmware ]]; then echo command-output; fi
+}
+send_ramdisk_chain
+'''
+            env = dict(os.environ, LIB=str(ROOT / 'n61-patcher-master/lib/device.sh'),
+                       REPO=str(root), T_RAMDISK_DIR='ramdisk', WK=str(root / 'work'),
+                       RAMDISK_SEP=str(sep))
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('transfer-output', result.stdout)
+            self.assertIn('command-output', result.stdout)
+
+    def test_failed_sep_ping_reports_uncertainty_and_stops(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.ramdisk-sep-sent').write_text('captured-sep.img4')
+            script = r'''
+source "$LIB"
+sep_ping_ok() { return 1; }
+log() { :; }
+sleep() { :; }
+die() { printf '%s\n' "$*" >&2; exit 1; }
+ensure_sep
+echo unexpected-continued
+'''
+            env = dict(os.environ, LIB=str(ROOT / 'n61-patcher-master/lib/ssh.sh'), WK=str(root))
+            result = subprocess.run(['bash', '-c', script], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('cause is unknown', result.stderr)
+            self.assertIn('Do not use seputil --load on A9', result.stderr)
+            self.assertNotIn('unexpected-continued', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
