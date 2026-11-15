@@ -37,6 +37,17 @@ class SepTests(unittest.TestCase):
         with self.assertRaises(sep.SepError):
             sep.select_sep(paths, "", "C" * 96)
 
+    def test_selects_a9_active_hash_and_rejects_other_slot(self):
+        active = "B" * 40
+        path = f"/mnt8/{active}/usr/standalone/firmware/sep-firmware.img4"
+        self.assertEqual(sep.select_sep([path], active.lower()), path)
+        self.assertEqual(sep.select_sep([path], "", active), path)
+        self.assertEqual(sep.preboot_hash_from_path(path), active)
+        with self.assertRaises(sep.SepError):
+            sep.select_sep([path], "A" * 40)
+        with self.assertRaises(sep.SepError):
+            sep.select_sep([path], "", "A" * 41)
+
     def test_cli_reports_ambiguous_candidates_without_selecting(self):
         slots = ["A" * 96, "B" * 96]
         paths = [f"/mnt8/{slot}/usr/standalone/firmware/sep-firmware.img4" for slot in slots]
@@ -66,6 +77,15 @@ class SepTests(unittest.TestCase):
             sep.validate_image(data[:-1])
         with self.assertRaises(sep.SepError):
             sep.validate_image(der(0x30, der(0x16, b"IMG4") + der(0x30, b"") + der(0xA0, ticket)))
+
+    def test_a9_ticket_sha1_matches_slot_and_rejects_mismatch(self):
+        data, ticket = image_and_ticket()
+        slot = hashlib.sha1(ticket).hexdigest().upper()
+        self.assertEqual(sep.validate_image(data, expected_ticket_hash=slot).ticket, ticket)
+        with self.assertRaises(sep.SepError):
+            sep.validate_image(data, expected_ticket_hash="A" * 40)
+        with self.assertRaises(sep.SepError):
+            sep.validate_image(data, expected_ticket_hash="A" * 41)
 
     def test_build_copies_entire_img4_and_rejects_wrong_ticket(self):
         data, ticket = image_and_ticket()
@@ -101,7 +121,7 @@ class SepTests(unittest.TestCase):
 
     def test_shell_capture_publishes_original_and_preserves_previous_on_failure(self):
         data, ticket = image_and_ticket()
-        slot = hashlib.sha384(ticket).hexdigest().upper()
+        slot = hashlib.sha1(ticket).hexdigest().upper()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "repo").mkdir()
@@ -136,6 +156,10 @@ class SepTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((root / "state/sep-firmware.img4").read_bytes(), data)
             self.assertEqual((root / "state/IM4M.bin").read_bytes(), ticket)
+            import json
+            receipt = json.loads((root / "state/sep-capture.json").read_text())
+            self.assertEqual(receipt["preboot_hash"], slot)
+            self.assertEqual(receipt["ticket_sha384"], hashlib.sha384(ticket).hexdigest().upper())
             source.write_bytes(data[:-1])
             result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)

@@ -85,6 +85,7 @@ def command_validate(args: argparse.Namespace) -> int:
             receipt(
                 image,
                 source=args.source or str(path),
+                preboot_hash=expected_hash,
                 expected_ecid=expected_ecid,
                 expected_cpid=expected_cpid,
                 actual_identity=identity,
@@ -93,7 +94,8 @@ def command_validate(args: argparse.Namespace) -> int:
 
     print(
         f"SEP IMG4 OK: type={image.image_type} "
-        f"preboot_hash={image.preboot_hash} "
+        f"ticket_sha384={image.preboot_hash} "
+        f"preboot_hash={expected_hash or 'unchecked'} "
         f"ecid={expected_ecid if expected_ecid is not None else 'unchecked'} "
         f"cpid={expected_cpid if expected_cpid is not None else 'unchecked'}"
     )
@@ -117,7 +119,7 @@ def main() -> int:
     select = subparsers.add_parser("select", help="select one active Preboot SEP image")
     select.add_argument("--mount", default="/mnt8", help="Preboot mount point in the ramdisk")
     select.add_argument("--active", default="", help="contents of <preboot>/active")
-    select.add_argument("--requested", help="explicit 96-hex Preboot slot hash")
+    select.add_argument("--requested", help="explicit 40- or 96-hex Preboot slot hash")
     select.add_argument("--stdin", action="store_true", help="also read candidate paths from stdin")
     select.add_argument("files", nargs="*", help="candidate paths")
     select.set_defaults(handler=command_select)
@@ -126,7 +128,7 @@ def main() -> int:
     validate.add_argument("--image", required=True)
     validate.add_argument("--source", help="original Preboot path, used to derive the ticket hash")
     validate.add_argument("--mount", default="/mnt8")
-    validate.add_argument("--preboot-hash", help="expected sha384(ticket) directory name")
+    validate.add_argument("--preboot-hash", help="expected SHA-1 or SHA-384 ticket directory name")
     validate.add_argument("--expect-ticket", help="require the embedded ticket to equal this IM4M file")
     validate.add_argument("--ticket-out", help="write the embedded IM4M here after validation")
     validate.add_argument("--receipt-out", help="write a JSON capture receipt here")

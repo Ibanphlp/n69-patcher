@@ -22,7 +22,7 @@ from typing import Iterable
 
 MAX_SEP_SIZE = 16 * 1024 * 1024
 VALID_IMAGE_TYPES = ("sepi", "rsep")
-_HASH_RE = re.compile(r"[0-9A-Fa-f]{96}")
+_HASH_RE = re.compile(r"(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{96})")
 
 
 class SepError(ValueError):
@@ -111,8 +111,13 @@ def validate_image(image: bytes, *, expected_ticket_hash: str | None = None) -> 
     payload, ticket = split_image(image)
     image_type = im4p_type(payload)
     _require(image_type in VALID_IMAGE_TYPES, f"Unexpected SEP IM4P type {image_type!r}")
-    actual_hash = ticket_hash(ticket)
     if expected_ticket_hash is not None:
+        _require(bool(_HASH_RE.fullmatch(expected_ticket_hash)), "Invalid Preboot ticket hash")
+        actual_hash = (
+            hashlib.sha1(ticket).hexdigest().upper()
+            if len(expected_ticket_hash) == 40
+            else ticket_hash(ticket)
+        )
         _require(
             actual_hash == expected_ticket_hash.upper(),
             "The SEP ticket hash does not match its Preboot directory",
@@ -127,10 +132,10 @@ def validate_image(image: bytes, *, expected_ticket_hash: str | None = None) -> 
 
 
 def preboot_hash_from_path(path: str, *, mount: str = "/mnt8") -> str:
-    """Extract the 96-hex slot name from one exact Preboot SEP path."""
+    """Extract a 40- or 96-hex slot name from an exact Preboot SEP path."""
 
     pattern = re.compile(
-        rf"^{re.escape(mount)}/([0-9A-Fa-f]{{96}})/usr/standalone/firmware/sep-firmware\.img4$"
+        rf"^{re.escape(mount)}/([0-9A-Fa-f]{{40}}|[0-9A-Fa-f]{{96}})/usr/standalone/firmware/sep-firmware\.img4$"
     )
     match = pattern.fullmatch(path.strip())
     _require(match is not None, "SEP source is not a Preboot slot firmware image")
@@ -147,7 +152,7 @@ def select_sep(
     """Select exactly one active Preboot SEP image, as SevenUP does."""
 
     pattern = re.compile(
-        rf"^{re.escape(mount)}/([0-9A-Fa-f]{{96}})/usr/standalone/firmware/sep-firmware\.img4$"
+        rf"^{re.escape(mount)}/([0-9A-Fa-f]{{40}}|[0-9A-Fa-f]{{96}})/usr/standalone/firmware/sep-firmware\.img4$"
     )
     valid: list[tuple[str, str]] = []
     for candidate in candidates:
@@ -158,7 +163,7 @@ def select_sep(
 
     active = active.strip().replace("\r", "")
     if requested:
-        _require(bool(_HASH_RE.fullmatch(requested)), "Preboot hash must contain exactly 96 hexadecimal characters")
+        _require(bool(_HASH_RE.fullmatch(requested)), "Preboot hash must contain 40 or 96 hexadecimal characters")
         valid = [row for row in valid if row[0] == requested.upper()]
     elif _HASH_RE.fullmatch(active):
         valid = [row for row in valid if row[0] == active.upper()]
@@ -260,6 +265,7 @@ def receipt(
     image: SepImage,
     *,
     source: str,
+    preboot_hash: str | None = None,
     expected_ecid: int | None = None,
     expected_cpid: int | None = None,
     actual_identity: tuple[int, int] | None = None,
@@ -270,7 +276,7 @@ def receipt(
         "schema": 1,
         "method": "sevenup-preboot-img4",
         "source": source,
-        "preboot_hash": image.preboot_hash,
+        "preboot_hash": preboot_hash or image.preboot_hash,
         "image_type": image.image_type,
         "image_sha256": image.image_sha256,
         "image_sha384": image.image_sha384,
