@@ -1,0 +1,9 @@
+# Python dependencies for N69AP iOS 16 build
+# Install on Mac: pip3 install -r requirements.txt
+
+# TOML parsing (needed for profiles/n69ap_ios16.toml)
+# tomllib is built-in Python 3.11+, use tomli for older versions
+tomli>=2.0.0; python_version < "3.11"
+
+# No other external dependencies required
+# All other modules are from Python standard library

@@ -1,0 +1,41 @@
+# User-provided firmware (IPSWs are large, not tracked)
+firmware/*.ipsw
+firmware/*.dmg
+
+# Generated artifacts
+artifacts/
+work/
+state/IM4M.bin
+state/*.bin
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+pwn.log
+sshrd*.log
+
+# Test artifacts
+test_KC.img4
+test_raw.bin
+test_*.bin
+test_*.raw
+
+# Build
+build/
+builds/

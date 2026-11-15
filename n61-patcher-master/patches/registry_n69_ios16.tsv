@@ -1,0 +1,21 @@
+dt	base	dt.base	core	version			0	N69AP iOS 16 base DeviceTree from 15.8.8
+kc	base	kc.j96_clean	core	version			0	iPad 5 iOS 16.7.16 kernelbase
+kc	transform	kc.remove_ipad_drivers	core	device	kc.j96_clean		0	Remove iPad drivers from prelink XML
+kc	transform	kc.pmu_d2255	pmu	device	kc.remove_ipad_drivers		0	D2255/Chestnut PMU transplant
+kc	transform	kc.touch_spin69	touch	device	kc.remove_ipad_drivers		0	SPIN69 touchscreen transplant
+kc	transform	kc.display_pinot	display	device	kc.remove_ipad_drivers		0	Pinot MIPI-DSIM display transplant
+kc	transform	kc.audio_cs42l71	audio	device	kc.remove_ipad_drivers		0	CS42L71 audio codec + CS35L19 amp
+kc	transform	kc.charger_c26	charging	device	kc.remove_ipad_drivers		0	C26 charger driver
+kc	transform	kc.sep_legacy	sep	version	kc.remove_ipad_drivers		0	Legacy SEP protocol (tag 8→2)
+kc	transform	kc.wifi_bcm	wifi	device	kc.remove_ipad_drivers		0	BCM Wi-Fi firmware hash bypass
+kc	transform	kc.vibration	vibration	device	kc.remove_ipad_drivers		0	DRV2604 haptic driver
+kc	transform	kc.watchtower	core	version	kc.sep_legacy		0	Watchtower tail
+kc	transform	kc.complzss_repack	core	version	kc.watchtower		0	Recompress kernelcache
+rootfs	stream	rootfs.base_stream	core	version			0	iPad 5 16.7.16 rootfs stream to s4
+rootfs	overlay	rootfs.apticket	core	device	rootfs.base_stream		0	IM4M for mobileactivationd
+rootfs	overlay	rootfs.b1_firmware	wifi	device	rootfs.base_stream		0	Wi-Fi/BT firmware from SystemA
+rootfs	overlay	rootfs.baseband_compatibility	baseband	version	rootfs.base_stream		0	CommCenter config for SE
+rootfs	overlay	rootfs.factorydata	baseband	device	rootfs.base_stream		0	Factory data from SystemA
+rootfs	overlay	rootfs.n69_model_files	core	device	rootfs.base_stream		0	N69AP model files
+rootfs	finalize	rootfs.finish	core	version	rootfs.base_stream		0	var→DataB, fsck, SEP, keybags
+rootfs	finalize	rootfs.set_roles	core	device	rootfs.finish		0	Set SystemB=0x1, DataB=0x40

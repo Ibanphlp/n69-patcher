@@ -1,0 +1,153 @@
+# shellcheck shell=bash
+# 设备链：irecovery 查询 / DFU 等待 / pwn / 发送启动链。
+
+irec() { "$(tool irecovery)" "$@"; }
+
+irec_checked() {
+    irec "$@" || die "irecovery 失败: $*；已中止启动链。"
+}
+
+device_query() { irec -q 2>/dev/null || true; }
+
+device_in_dfu() { device_query | grep -q "MODE: DFU"; }
+
+devices_present() { device_query | grep -q "CPID"; }
+device_in_recovery() { device_query | grep -qE "MODE: (DFU|Recovery)"; }
+
+wait_dfu() {
+    local timeout="${N61_DFU_TIMEOUT:-900}" waited=0
+    have_tool irecovery || die "缺少工具: irecovery（先跑 tools/setup.py 或设 LIOS_BIN）"
+    if [ "$timeout" -gt 0 ]; then
+        log "等待设备进入 DFU（关机后按住 Home+电源，最长 ${timeout}s）…"
+    else
+        log "等待设备进入 DFU（关机后按住 Home+电源）…"
+    fi
+    while :; do
+        device_in_dfu && return 0
+        if [ "$timeout" -gt 0 ] && [ "$waited" -ge "$timeout" ]; then
+            die "等待 DFU 超时（${timeout}s）：确认设备已连接并进入 DFU；可用 N61_DFU_TIMEOUT=秒数 调整（0 = 无限等待）"
+        fi
+        sleep 1
+        waited=$(( waited + 1 ))
+        if [ $(( waited % 30 )) -eq 0 ]; then
+            log "仍在等待 DFU…（${waited}s）"
+        fi
+    done
+}
+
+need_dfu() {
+    device_in_dfu && return 0
+    wait_dfu
+}
+
+pwn_device() {
+    local q g
+    q="$(device_query)"
+    if ! printf '%s' "$q" | grep -q "PWND"; then
+        log "gaster pwn…"
+        "$(tool gaster)" pwn || die "gaster pwn 失败"
+    fi
+    log "gaster reset…"
+    "$(tool gaster)" reset >/dev/null 2>&1 || true
+    sleep 1
+}
+
+# 发送 SSH ramdisk 启动链
+# RAMDISK_SEP 非空时（由 prepare_ramdisk_sep 设置），在 bootx 前用 iBoot 的 rsepfirmware
+# 加载 SEP——A9 上不能在 ramdisk 里 seputil --load（内核卡死），只能走这条路。
+send_ramdisk_chain() {
+    local dir img name total=6 s=0 sep="${RAMDISK_SEP:-}" marker
+    dir="$REPO/$T_RAMDISK_DIR"
+    img() { printf '%s\n' "$dir/$1.img4"; }
+    for name in iBSS iBEC ramdisk devicetree trustcache kernelcache; do
+        [ -f "$(img "$name")" ] || die "缺少 ramdisk 组件: $dir/$name.img4"
+    done
+    if [ -n "$sep" ]; then
+        [ -s "$sep" ] || die "ramdisk SEP 镜像不存在或为空: $sep"
+        total=7
+    fi
+    marker="$WK/.ramdisk-sep-sent"
+    mkdir -p "$WK"
+    rm -f "$marker"
+
+    need_dfu
+    pwn_device
+    s=$(( s + 1 )); step "$s" "$total" "发送 iBSS";       irec -f "$(img iBSS)" >/dev/null; sleep 2
+    s=$(( s + 1 )); step "$s" "$total" "发送 iBEC";       irec -f "$(img iBEC)" >/dev/null; sleep 3
+    if [ -f "$(img bootlogo)" ]; then
+        irec -f "$(img bootlogo)" >/dev/null 2>&1 || true
+        irec -c "setpicture 0x1" >/dev/null 2>&1 || true
+        sleep 1
+    fi
+    s=$(( s + 1 )); step "$s" "$total" "发送 Ramdisk"
+    irec -f "$(img ramdisk)" >/dev/null; irec -c ramdisk >/dev/null; sleep 1
+    s=$(( s + 1 )); step "$s" "$total" "发送 DeviceTree"
+    irec -f "$(img devicetree)" >/dev/null; irec -c devicetree >/dev/null; sleep 1
+    s=$(( s + 1 )); step "$s" "$total" "发送 TrustCache"
+    irec -f "$(img trustcache)" >/dev/null; irec -c firmware >/dev/null; sleep 1
+    if [ -n "$sep" ]; then
+        s=$(( s + 1 )); step "$s" "$total" "发送 SEP（iBoot rsepfirmware）"
+        irec_checked -f "$sep" >/dev/null; irec_checked -c rsepfirmware >/dev/null; sleep 1
+        SSH_LOST_HINT="  本次 ramdisk 带 SEP 启动（${sep}）。
+  若一直连不上：SEP ROM 可能拒绝了镜像（IM4M 与 ${T_BUILD_N69:-IPSW} 的 SEP 不匹配）。
+  强制重启进 DFU 后用 N61_RAMDISK_SEP=0 ./n61.sh ramdisk 确认不带 SEP 时能否正常进入。"
+    fi
+    s=$(( s + 1 )); step "$s" "$total" "发送 KernelCache + bootx"
+    irec -f "$(img kernelcache)" >/dev/null
+    irec -c bootx >/dev/null
+    log "ramdisk 启动链已发送，等待 SSH 就绪…"
+    ssh_wait 180 1
+    SSH_LOST_HINT=""
+    [ -n "$sep" ] && printf '%s\n' "$sep" >"$marker"
+    return 0
+}
+
+# 设备身份校验（boot 前）
+identity_guard() {
+    local q short
+    [ "${OPT_NO_IDENTITY:-0}" -eq 1 ] && return 0
+    q="$(device_query)"
+    printf '%s' "$q" | grep -qi "$T_MODEL" || \
+        die "连接的设备不是 ${T_MODEL}（irecovery -q 未匹配）。加 --no-identity-check 跳过。"
+    short="$(printf '%s' "$T_ECID" | tr 'A-Z' 'a-z' | sed 's/^0x//; s/^0*//')"
+    if [ -n "$short" ]; then
+        printf '%s' "$q" | tr 'A-Z' 'a-z' | grep -q "$short" || \
+            warn "ECID 未匹配清单 ${T_ECID}；请确认是目标 ${T_MODEL}。"
+    fi
+}
+
+# 发送已构建的启动链（iBSS→iBEC[→go]→DT→TC→SEP→KC→bootx，顺序与 SevenUP 一致）
+# `go` 只有 A10+（CPID 0x8010/0x8011/0x8012/0x8015）需要；A9 上 iBEC 加载后自动运行。
+send_boot_chain() {
+    local iBSS iBEC DT TC KC SEP cpid
+    iBSS="$(wk boot_iBSS.img4)"; iBEC="$(wk boot_iBEC.img4)"
+    DT="$(wk boot_DT.img4)";     TC="$(wk boot_TC.img4)"; KC="$(wk boot_KC.img4)"
+    SEP="$(wk boot_SEP.img4)"
+    [ -f "$SEP" ] || SEP="$(wk sep.img4)"
+    for f in "$iBSS" "$iBEC" "$DT" "$TC" "$KC"; do
+        [ -f "$f" ] || die "缺少 $(basename "$f")：先在 $WK 构建（./n61.sh build）"
+    done
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        [ -s "$SEP" ] || die "N69 iOS16 启动必须有 SEP 镜像：先运行 build。"
+    fi
+    need_dfu
+    identity_guard
+    cpid="$(device_query | awk '/CPID/ {print $2}')"
+
+    step 1 8 "准备 DFU（gaster pwn/reset）"
+    pwn_device
+    step 2 8 "发送 iBSS";      irec_checked -f "$iBSS" >/dev/null; sleep 3
+    step 3 8 "发送 iBEC";      irec_checked -f "$iBEC" >/dev/null
+    case "$cpid" in 0x8010|0x8011|0x8012|0x8015) sleep 1; irec_checked -c go >/dev/null ;; esac
+    sleep 3
+    step 4 8 "发送 DeviceTree"; irec_checked -f "$DT" >/dev/null; irec_checked -c devicetree >/dev/null; sleep 1
+    step 5 8 "发送 TrustCache"; irec_checked -f "$TC" >/dev/null; irec_checked -c firmware >/dev/null; sleep 1
+    if [ -f "$SEP" ]; then
+        step 6 8 "发送 SEP";   irec_checked -f "$SEP" >/dev/null; irec_checked -c rsepfirmware >/dev/null; sleep 1
+    else
+        warn "没有 SEP 镜像（boot_SEP.img4/sep.img4），跳过；iOS16 缺 SEP 通常会卡住。"
+    fi
+    step 7 8 "发送 KernelCache"; irec_checked -f "$KC" >/dev/null
+    step 8 8 "启动 iOS16（bootx）"; irec_checked -c bootx >/dev/null
+    ok "启动链已全部发送，观察设备屏幕。"
+}

@@ -1,0 +1,163 @@
+{
+  "target_kernel_sha256": "4242a4d2cc20e08bc6abe69546c540a884209e6c85a0638841e592ca1f1e57a2",
+  "se_kernel_sha256": "fbd1d55ffb1d11f2859ad9dedad27e992854a0822bcd410246480468aff9ec69",
+  "drivers": {
+    "pmu": {
+      "footprint": "com.apple.driver.AppleD2365PMU",
+      "se_driver": "com.apple.driver.AppleD2255PMU",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": 7769,
+          "se_bytes": 7656
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": 38776,
+          "se_bytes": 35476
+        },
+        "__DATA": {
+          "target_bytes": 1160,
+          "se_bytes": 1160
+        },
+        "__DATA_CONST": {
+          "target_bytes": 8744,
+          "se_bytes": 8184
+        }
+      },
+      "trial": "rejected: PortError: Native dependency UUID differs com.apple.driver.AppleDialogPMU"
+    },
+    "display": {
+      "footprint": "com.apple.driver.AppleANXDPTX",
+      "se_driver": "com.apple.driver.ApplePinotLCD",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": 54144,
+          "se_bytes": 1738
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": 226512,
+          "se_bytes": 3524
+        },
+        "__DATA": {
+          "target_bytes": 1688,
+          "se_bytes": 256
+        },
+        "__DATA_CONST": {
+          "target_bytes": 77688,
+          "se_bytes": 1840
+        }
+      },
+      "trial": "rejected: PortError: Native dependency UUID differs com.apple.driver.AppleARMPlatform"
+    },
+    "touch": {
+      "footprint": "com.apple.driver.AppleMultitouchSPIC1F15",
+      "se_driver": "com.apple.driver.AppleMultitouchSPIN69",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": null,
+          "se_bytes": null
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": null,
+          "se_bytes": null
+        },
+        "__DATA": {
+          "target_bytes": null,
+          "se_bytes": null
+        },
+        "__DATA_CONST": {
+          "target_bytes": null,
+          "se_bytes": null
+        }
+      },
+      "trial": "rejected: KeyError: '__TEXT'"
+    },
+    "audio_codec": {
+      "footprint": "com.apple.driver.AppleANXDPTX",
+      "se_driver": "com.apple.driver.AppleCS42L71Audio",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": 54144,
+          "se_bytes": 10811
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": 226512,
+          "se_bytes": 68892
+        },
+        "__DATA": {
+          "target_bytes": 1688,
+          "se_bytes": 592
+        },
+        "__DATA_CONST": {
+          "target_bytes": 77688,
+          "se_bytes": 20560
+        }
+      },
+      "trial": "rejected: PortError: Native dependency UUID differs com.apple.iokit.IOMikeyBusFamily"
+    },
+    "audio_amplifier": {
+      "footprint": "com.apple.driver.AppleAE2Audio",
+      "se_driver": "com.apple.driver.AppleCS35L19Amp",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": 5181,
+          "se_bytes": 2368
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": 22308,
+          "se_bytes": 16900
+        },
+        "__DATA": {
+          "target_bytes": 376,
+          "se_bytes": 272
+        },
+        "__DATA_CONST": {
+          "target_bytes": 7608,
+          "se_bytes": 3592
+        }
+      },
+      "trial": "rejected: PortError: Native dependency UUID differs com.apple.driver.AppleEmbeddedAudio"
+    },
+    "charger": {
+      "footprint": "com.apple.driver.AppleHDQGasGaugeControl",
+      "se_driver": "com.apple.driver.AppleC26Charger",
+      "target_footprint_present": true,
+      "se_driver_present": true,
+      "missing_dependencies": [],
+      "segments": {
+        "__TEXT": {
+          "target_bytes": 8708,
+          "se_bytes": 10769
+        },
+        "__TEXT_EXEC": {
+          "target_bytes": 23964,
+          "se_bytes": 54608
+        },
+        "__DATA": {
+          "target_bytes": 913,
+          "se_bytes": 1040
+        },
+        "__DATA_CONST": {
+          "target_bytes": 4240,
+          "se_bytes": 24912
+        }
+      },
+      "trial": "rejected: PortError: Image does not fit __TEXT"
+    }
+  },
+  "warning": "Research only; neither a successful transplant nor a build proves SE runtime or SEP compatibility."
+}

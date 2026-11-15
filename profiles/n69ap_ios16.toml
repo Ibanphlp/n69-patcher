@@ -1,0 +1,136 @@
+# iOS 16 target configuration for N69AP (iPhone SE 1st gen)
+# Based on n56-patcher's n56_ios13.py structure
+
+[target]
+product_type = "iPhone8,4"
+board_config = "n69ap"
+soc = "A9"
+ecid = ""  # Fill in after IM4M extraction
+
+# Source firmware profiles (IPSW paths relative to firmware/ directory)
+[source_profiles]
+# Device-specific: SE on iOS 15.8.8 (baseband, SEP, Wi-Fi, boot chain)
+target_ios15 = "iPhone_4.0_64bit_15.8.8_19H422_Restore.ipsw"
+# Kernel donor: iPad 5 on iPadOS 16.7.16 (kernel, base rootfs)
+donor_ipados16 = "iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw"
+# App donor: iPhone 6s on iOS 15.8.8 (Health, Phone, Wallet apps) - optional
+# app_donor_ios15 = "iPhone_4.7_64bit_15.8.8_19H422_Restore.ipsw"
+
+# Boot arguments for iBEC (like n56-patcher's boot_args)
+# rd=disk0s1s8 = root device is SystemB (partition 4)
+# -v = verbose boot
+# amfi_get_out_of_my_way=1 = disable AMFI
+# cs_enforcement_disable=1 = disable code signing enforcement
+# wdt=-1 = disable watchdog
+# debug=0x2014e keepsyms=1 = debug flags
+[boot_args]
+args = "rd=disk0s1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
+root_partition = 8  # SystemB = disk0s1s8 (s4=Update, s5=xART are in use)
+
+# APFS Volume layout (inside container disk0s1)
+# Role 1 = System, Role 64 = Data, Role 128 = Baseband
+[volumes]
+# SystemA (existing iOS 15) = disk0s1s1 (role 1)
+# DataA (existing iOS 15) = disk0s1s2 (role 64)
+# BasebandData = disk0s1s3 (role 128)
+system_b = { name = "SystemB", role = 1, partition = 8 }    # disk0s1s8
+data_b = { name = "DataB", role = 64, partition = 9 }       # disk0s1s9
+# baseband_b = { name = "BasebandB", role = 128, partition = 3 }  # Keep original
+
+# Component sources (which IPSW provides what)
+[component_sources]
+# Kernel and base rootfs from iPad 5 iOS 16 (donor for clean KC base)
+kernelcache = "donor_ipados16"
+base_rootfs = "donor_ipados16"
+
+# Device-specific from SE iOS 15 (boot chain, SEP, basebands, Wi-Fi, BT)
+sep = "target_ios15"
+baseband = "target_ios15"
+wifi_firmware = "target_ios15"
+bt_firmware = "target_ios15"
+boot_chain = "target_ios15"  # iBSS, iBEC, iBoot, LLB
+
+# iPhone-specific apps from SE iOS 15 (or iPhone 6s if available)
+# health_app = "app_donor_ios15"
+# phone_app = "app_donor_ios15"
+# wallet_app = "app_donor_ios15"
+
+# KernelCache patches to apply (in order, with dependencies)
+[kernelcache_patches]
+# 1. Generic security patches (equivalent to KPlooshFinder + Kernel64Patcher)
+generic_security = { enabled = true, profile = "j96_clean" }
+
+# 2. KPF/Checkra1n patches (offline KPF application)
+# checkra1n_kpf = { enabled = false, profile = "checkra1n" }
+
+# 3. Kernel info offset cache (for checkra1n userland)
+# kerninfo = { enabled = false, profile = "kerninfo" }
+
+# 4. N69 hardware ports stay disabled until each transplant has a validated
+# kernel output and target hardware/ABI compatibility evidence. The current
+# trial can transplant PMU, display, and audio bundles, but C26 does not fit;
+# touch and haptics are placeholders, and a successful transplant alone does
+# not establish runtime compatibility.
+pmu_d2255 = { enabled = false, profile = "pmu_d2255" }
+touch_spin69 = { enabled = false, profile = "touch_spin69" }
+display_pinot = { enabled = false, profile = "display_pinot" }
+audio_cs42l71 = { enabled = false, profile = "audio_cs42l71" }
+audio_cs35l19 = { enabled = false, profile = "audio_cs35l19" }
+charger_c26 = { enabled = false, profile = "charger_c26" }
+sep_legacy = { enabled = false, profile = "sep_legacy" }
+wifi_bcm = { enabled = false, profile = "wifi_bcm" }
+vibration_drv2604 = { enabled = false, profile = "vibration_drv2604" }
+
+# 5. Remove iPad-only drivers (required for N69AP to boot)
+remove_ipad_drivers = { enabled = true, profile = "remove_ipad_drivers" }
+
+# Watchtower (required for iBoot kernelcache validation)
+[watchtower]
+enabled = true
+source = "donor_ipados16"  # Copy from iPad5 kernelcache
+
+# TrustCache configuration - full mode for iOS 16
+[trustcache]
+base = "donor_ipados16"  # Start from iPad5 iOS 16 trust cache
+full = true  # Include all components
+# Additional cdhashes to add (computed at build time from installed apps)
+add_components = [
+    "mrm",
+    "health_libraries",
+    "bluetooth_service",
+    "sep_service",
+    "dyld_shared_cache",
+    "se_specific_binaries",
+]
+
+# IM4M / APTicket
+[im4m]
+# Extracted from NOR via SSH ramdisk on iOS 15.8.8
+# Path: state/IM4M.bin
+nor_device = "/dev/disk2"
+nor_size_mb = 4
+
+# Tools
+[tools]
+img4 = "ramdisk-main/Darwin/img4"
+gaster = "ramdisk-main/Darwin/gaster"
+irecovery = "ramdisk-main/Darwin/irecovery"
+checkra1n = "ramdisk-main/Darwin/checkra1n"
+palera1n = "ramdisk-main/Darwin/palera1n"
+pongoterm = "ramdisk-main/Darwin/pongoterm"
+iBoot64Patcher = "ramdisk-main/Darwin/iBoot64Patcher"
+kairos = "tools/dualra1n/binaries/Darwin/kairos"
+kernel_diff = "ramdisk-main/Darwin/kerneldiff"
+sshpass = "ramdisk-main/Darwin/sshpass"
+iproxy = "ramdisk-main/Darwin/iproxy"
+jq = "ramdisk-main/Darwin/jq"
+
+# Output artifacts
+[output]
+boot_ibss = "artifacts/boot/boot_iBSS.img4"
+boot_ibec = "artifacts/boot/boot_iBEC.img4"
+boot_dt = "artifacts/boot/boot_DT.img4"
+boot_tc = "artifacts/boot/boot_TC.img4"
+boot_kc = "artifacts/boot/boot_KC.img4"
+boot_manifest = "artifacts/boot/boot.json"
+im4m = "state/IM4M.bin"
