@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FullInstallerTests(unittest.TestCase):
-    def run_installer(self, *, captured=False, ramdisk=True, fail_capture=False, fail_verify=False):
+    def run_installer(self, *, captured=False, ramdisk=True, fail_capture=False, fail_verify=False, resume=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             log = root / "events"
@@ -63,7 +63,10 @@ printf 'verify\n' >> "$TEST_LOG"
             env = dict(os.environ, PATH=str(root / "bin") + os.pathsep + os.environ["PATH"],
                        TEST_LOG=str(log), N69_EXPERIMENTAL_INSTALL_ACK="1",
                        FAIL_CAPTURE=str(int(fail_capture)), FAIL_VERIFY=str(int(fail_verify)))
-            result = subprocess.run(["bash", str(root / "installer.sh"), "full"], cwd=root, env=env,
+            command = ["bash", str(root / "installer.sh"), "full"]
+            if resume:
+                command.append("--resume-ramdisk")
+            result = subprocess.run(command, cwd=root, env=env,
                                     input="\n" * 5, capture_output=True, text=True, timeout=30)
             return result, log.read_text().splitlines() if log.exists() else []
 
@@ -72,6 +75,22 @@ printf 'verify\n' >> "$TEST_LOG"
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(events[:6], ["generate:15.8.8", "ramdisk:0", "capture-sep:", "verify", "build:full", "ramdisk:1"])
         self.assertIn("volumes:", events)
+
+    def test_resume_captures_without_reboot_and_verifies_before_build(self):
+        result, events = self.run_installer(ramdisk=False, resume=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events[:5], ["capture-sep:", "verify", "generate:15.8.8", "build:full", "ramdisk:1"])
+        self.assertIn("volumes:", events)
+
+    def test_resume_capture_failure_never_builds_or_writes_volumes(self):
+        result, events = self.run_installer(resume=True, fail_capture=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ["capture-sep:"])
+
+    def test_resume_existing_capture_still_requires_live_device_verification(self):
+        result, events = self.run_installer(resume=True, captured=True, fail_verify=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, ["verify"])
 
     def test_existing_capture_is_verified_before_build(self):
         result, events = self.run_installer(captured=True)

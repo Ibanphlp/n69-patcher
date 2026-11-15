@@ -37,6 +37,21 @@ class SepTests(unittest.TestCase):
         with self.assertRaises(sep.SepError):
             sep.select_sep(paths, "", "C" * 96)
 
+    def test_cli_reports_ambiguous_candidates_without_selecting(self):
+        slots = ["A" * 96, "B" * 96]
+        paths = [f"/mnt8/{slot}/usr/standalone/firmware/sep-firmware.img4" for slot in slots]
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools/sep_image.py"), "select", "--active", "", "--stdin"],
+            input="\n".join(paths), capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("Preboot active value (up to 512 characters): ''", result.stderr)
+        self.assertIn("SEP paths found: 2", result.stderr)
+        for path in paths:
+            self.assertIn(path, result.stderr)
+        self.assertIn("No SEP was selected", result.stderr)
+
     def test_embedded_ticket_slot_and_type_validation(self):
         data, ticket = image_and_ticket()
         slot = hashlib.sha384(ticket).hexdigest().upper()

@@ -1,7 +1,7 @@
 #!/bin/bash
 # n69ap_ios16_full_install.sh
 # Full automated installation for iPhone SE 1st Gen (N69AP) iOS 16 tethered boot
-# Usage: ./n69ap_ios16_full_install.sh [full|minimal|safe-minimal]
+# Usage: ./n69ap_ios16_full_install.sh [full|minimal|safe-minimal] [--resume-ramdisk]
 
 set -euo pipefail
 
@@ -39,6 +39,13 @@ case "$MODE" in
     full|minimal|safe-minimal) ;;
     *) echo "Unsupported mode: $MODE (use full, minimal, or safe-minimal)" >&2; exit 2 ;;
 esac
+RESUME_RAMDISK=0
+if [[ "${2:-}" == "--resume-ramdisk" && $# -eq 2 ]]; then
+    RESUME_RAMDISK=1
+elif [[ $# -gt 1 ]]; then
+    echo "Usage: $0 [full|minimal|safe-minimal] [--resume-ramdisk]" >&2
+    exit 2
+fi
 
 # Paths (n56-standard)
 IM4M="state/IM4M.bin"
@@ -84,14 +91,6 @@ echo -e "${GREEN}[✓]${NC} All IPSWs present"
 # Device check
 echo ""
 echo -e "${CYAN}━━━ Device Check ━━━${NC}"
-echo "Place iPhone SE 1st Gen in DFU mode:"
-echo "  1. Connect to Mac via USB"
-echo "  2. Hold Power + Home for 8 seconds"
-echo "  3. Release Power, keep holding Home for 15 seconds"
-echo "  4. Screen stays BLACK = DFU mode"
-echo ""
-read -p "Press Enter when device is in DFU mode..." -r
-
 require_n69_dfu() {
     local probe
     probe=$("$IRECOVERY" -q 2>&1) || { echo "Cannot query the connected device." >&2; return 1; }
@@ -102,34 +101,56 @@ require_n69_dfu() {
     fi
 }
 
-require_n69_dfu
-echo -e "${GREEN}[✓]${NC} N69AP detected in DFU mode"
+if [[ "$RESUME_RAMDISK" -eq 1 ]]; then
+    echo "Resuming SEP capture from the running SSH ramdisk; keep the iPhone connected."
+else
+    echo "Place iPhone SE 1st Gen in DFU mode:"
+    echo "  1. Connect to Mac via USB"
+    echo "  2. Hold Power + Home for 8 seconds"
+    echo "  3. Release Power, keep holding Home for 15 seconds"
+    echo "  4. Screen stays BLACK = DFU mode"
+    echo ""
+    read -p "Press Enter when device is in DFU mode..." -r
+    require_n69_dfu
+    echo -e "${GREEN}[✓]${NC} N69AP detected in DFU mode"
+fi
 
 # The generated ramdisk is needed both for capture and for installation.
 echo ""
 echo -e "${CYAN}━━━ Preparing SSH Ramdisk ━━━${NC}"
-ramdisk_missing=0
-for component in iBSS iBEC ramdisk devicetree trustcache kernelcache; do
-    [[ -s "ramdisk-main/sshramdisk/$component.img4" ]] || ramdisk_missing=1
-done
-if [[ "$ramdisk_missing" -eq 1 ]]; then
-    echo "Generating the stock 15.8.8 SSH ramdisk..."
-    (cd ramdisk-main && ./sshrd.sh 15.8.8)
+ensure_ramdisk_images() {
+    local component ramdisk_missing=0
     for component in iBSS iBEC ramdisk devicetree trustcache kernelcache; do
-        [[ -s "ramdisk-main/sshramdisk/$component.img4" ]] || {
-            echo "SSH ramdisk generation did not produce $component.img4; stopping." >&2
-            exit 1
-        }
+        [[ -s "ramdisk-main/sshramdisk/$component.img4" ]] || ramdisk_missing=1
     done
+    if [[ "$ramdisk_missing" -eq 1 ]]; then
+        echo "Generating the stock 15.8.8 SSH ramdisk..."
+        (cd ramdisk-main && ./sshrd.sh 15.8.8)
+        for component in iBSS iBEC ramdisk devicetree trustcache kernelcache; do
+            [[ -s "ramdisk-main/sshramdisk/$component.img4" ]] || {
+                echo "SSH ramdisk generation did not produce $component.img4; stopping." >&2
+                exit 1
+            }
+        done
+    fi
+}
+if [[ "$RESUME_RAMDISK" -eq 0 ]]; then
+    ensure_ramdisk_images
 fi
 
 # Capture the complete device-specific IMG4 and its embedded IM4M before the build.
 echo ""
 echo -e "${CYAN}━━━ SEP and IM4M ━━━${NC}"
+captured_now=0
 if [[ ! -s "$SEP" || ! -s "$IM4M" ]]; then
     echo "Capturing the stock SEP from this device's Preboot volume..."
-    N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
+    if [[ "$RESUME_RAMDISK" -eq 0 ]]; then
+        N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
+    fi
     ./n61.sh capture-sep --target n69-ios16
+    captured_now=1
+fi
+if [[ "$RESUME_RAMDISK" -eq 1 || "$captured_now" -eq 1 ]]; then
     echo "Return the phone to DFU mode so its captured SEP can be verified and the boot images built."
     read -p "Press Enter when device is in DFU mode..." -r
     require_n69_dfu
@@ -141,6 +162,9 @@ fi
 "$IRECOVERY" -q | python3 tools/sep_image.py verify-device \
     --image "$SEP" --expect-ticket "$IM4M" --img4tool "$IMG4TOOL"
 echo -e "${GREEN}[✓]${NC} Captured SEP and IM4M match the connected device"
+if [[ "$RESUME_RAMDISK" -eq 1 ]]; then
+    ensure_ramdisk_images
+fi
 
 # Build boot chain
 echo ""

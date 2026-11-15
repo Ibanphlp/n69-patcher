@@ -34,7 +34,17 @@ def command_select(args: argparse.Namespace) -> int:
     candidates = list(args.files)
     if args.stdin:
         candidates.extend(sys.stdin.read().splitlines())
-    path = select_sep(candidates, args.active, args.requested, mount=args.mount)
+    try:
+        path = select_sep(candidates, args.active, args.requested, mount=args.mount)
+    except SepError:
+        print(f"Preboot active value (up to 512 characters): {args.active.strip()[:512]!r}", file=sys.stderr)
+        print(f"SEP paths found: {len(candidates)}", file=sys.stderr)
+        for candidate in candidates[:50]:
+            print(f"  {candidate!r}", file=sys.stderr)
+        if len(candidates) > 50:
+            print(f"  ... {len(candidates) - 50} more paths omitted", file=sys.stderr)
+        print("No SEP was selected. Do not guess a slot or share SEP/IM4M files.", file=sys.stderr)
+        raise
     print(path)
     return 0
 
