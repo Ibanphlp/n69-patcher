@@ -1,4 +1,10 @@
-# N69AP iOS 16 Complete Audit vs Reference Projects (n56, n61, SevenUP)
+# N69AP iOS 16 audit notes
+
+This table is not a completed port. SpringBoard is unproven until a serial log shows the SE PMU probe, the Pinot framebuffer, and launchd. Host tests and a structural transplant pass do not replace that log.
+
+Out of scope: passcode and Touch ID, baseband, and an untethered boot.
+
+# N69AP iOS 16 comparison with n56, n61 and SevenUP
 
 ## Summary Table
 
@@ -21,15 +27,15 @@
 | **KC ROUNDTRIP VERIFY** | ✅ | ✅ | ❌ | ✅ **Added in build.py** | **Complete** |
 | **KERNEL PATCHES (SevenUP engine)** |
 | Remove iPad drivers | N/A | ✅ | ✅ | ✅ IDREF inlining | **Complete** |
-| PMU transplant | D2207 | D2186 | ✅ | ✅ D2255/Chestnut | **Complete** |
-| Touch transplant | SPIC1F15 | SN2400 | ✅ | ✅ SPIN69 | **Complete** |
-| Display transplant | DPDisplay | DPDisplay | ✅ | ✅ Pinot MIPI-DSIM | **Complete** |
-| Audio codec transplant | CS42L67 | CS42L81 | ✅ | ✅ CS42L71 | **Complete** |
-| Audio amp transplant | N/A | AE2 | ✅ | ✅ CS35L19 | **Complete** |
-| Charger transplant | N/A | SN2400 | ✅ | ⚠️ **C26 size fix implemented** | **Complete*** |
-| Vibration transplant | DRV2604 | DRV2604 | ✅ | ✅ DRV2604 | **Complete** |
-| WiFi hash bypass | B1 | B1 | ✅ | ✅ BCM mov w0,#1 | **Complete** |
-| SEP legacy | tag 8→2 | tag 8→2 | ✅ | ✅ tag 8→2, Mgr→ret | **Complete** |
+| PMU transplant | D2207 | D2186 | ✅ | D2255 in the D2365 slots, bindings reviewed | **Structural only** |
+| Touch transplant | SPIC1F15 | SN2400 | ✅ | AppleMultitouchSPI plus the SPIN69 personality | **Structural only** |
+| Display transplant | DPDisplay | DPDisplay | ✅ | Pinot replaces AppleDPDisplay | **Structural only** |
+| Audio codec transplant | CS42L67 | CS42L81 | ✅ | Not on the boot path | **Not booted** |
+| Audio amp transplant | N/A | AE2 | ✅ | Withheld; no missing-amp personality | **Not booted** |
+| Charger transplant | N/A | SN2400 | ✅ | C26 does not fit AppleHDQGasGaugeControl and is not truncated | **Not booted** |
+| Vibration transplant | DRV2604 | DRV2604 | ✅ | Disabled; iPad kernel has no matching class | **Not booted** |
+| WiFi hash store | B1 hash records | B1 hash records | ✅ | SE trx/clmb/txcb hashes; not mov w0,#1 | **Not on boot path** |
+| SEP request shim | legacy sites | legacy sites | AK1/AK2 | v2 request layout, before-bytes asserted; no prologue-to-ret | **Structural only** |
 | Generic KPF security | KPF | KPF | KPF | ⚠️ **Partial - pattern-based** | **Partial** |
 | **ROOTFS INSTALLATION PIPELINE** |
 | Ramdisk entry | ✅ | ✅ | N/A | ✅ gaster pwn/reset | **Complete** |

@@ -196,7 +196,9 @@ fi
 echo "Put the SE back in DFU mode if it is not already."
 read -p "Press Enter when device is in DFU mode..." -r
 require_n69_dfu
-N61_RAMDISK_SEP=1 ./n61.sh ramdisk --target n69-ios16
+# Unencrypted DataB copies stock keybags. The ramdisk stays SEP-off; a SEP
+# that never answers seputil --ping must not abort the install.
+N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
 
 # Flash volumes
 echo ""
@@ -267,6 +269,18 @@ if [[ "$PROBE" != *"PWND"* ]]; then
     "$GASTER" reset
     sleep 2
 fi
+
+python3 - << 'PY'
+import json
+from pathlib import Path
+manifest = json.loads(Path("artifacts/boot/boot.json").read_text())
+if manifest.get("trustcache_is_stock", True):
+    raise SystemExit(
+        "Refusing to send artifacts/boot/boot_TC.img4: it is still the stock iPad "
+        "trust cache from before patch-rootfs and the cryptex. Rebuild it from the "
+        "binaries that were actually written, then clear trustcache_is_stock."
+    )
+PY
 
 echo "  Sending boot chain..."
 

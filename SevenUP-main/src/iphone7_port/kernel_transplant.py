@@ -82,8 +82,13 @@ def apply(source, donor, work, OLD, NAME, SOURCE_MARKER, TARGET_MARKER=None,
     k, d = KC(source), KC(donor)
     old={s['name']:s for s in k.ksegments(OLD)}
     ds={s['name']:s for s in d.ksegments(NAME)}
-    require(not any(OLD in e.get('OSBundleLibraries',{}) for e in k.kexts.values()),'Orion has dependent bundle')
-    require(NAME not in k.kexts,'Amp already present')
+    # Replacing a bundle with the same identifier keeps every OSBundleLibraries
+    # edge valid. A different identifier still must not be required by anyone,
+    # because those load edges would name a kext this transplant deletes.
+    dependents=[n for n,e in k.kexts.items() if OLD in (e.get('OSBundleLibraries') or {})]
+    if NAME!=OLD:
+        require(not dependents,'Orion has dependent bundle')
+    require(NAME not in k.kexts or NAME==OLD,'Amp already present')
     # Preserve page offsets where capacity permits; otherwise exact page values
     # are reconstructed by a small ADRP+ADD veneer, as in the working DS2 port.
     dst={}
@@ -176,9 +181,27 @@ def apply(source, donor, work, OLD, NAME, SOURCE_MARKER, TARGET_MARKER=None,
             page=adrp_page(w,pc);n=page_owner(page);reg=w&31
             require(reg not in (30,31),'Unexpected ADRP destination')
             value=page+dst[n]-ds[n]['addr']
+            nxt=struct.unpack_from('<I',raw,i+4)[0] if i+4<len(raw) else 0
+            delta=dst[n]-ds[n]['addr']
             if value%4096==0:
                 write(npc,struct.pack('<I',encode_adrp(w,npc,value)))
                 adrp.append(dict(pc=hex(npc),value=hex(value),kind='page'))
+            elif nxt&0xffc00000==0x91000000 and (nxt>>5)&31==reg and nxt&31==reg:
+                # Same in-place ADRP+ADD retarget kernel_d2333 uses when a
+                # veneer would not fit in the reclaimed allocation.
+                original=page+((nxt>>10)&4095)
+                moved=local(original)
+                require(moved is not None and moved==original+delta,'ADD target outside its own segment')
+                write(npc,struct.pack('<II',encode_adrp(w,npc,moved&~4095),(nxt&~(4095<<10))|((moved&4095)<<10)))
+                adrp.append(dict(pc=hex(npc),value=hex(moved),kind='destructive-ADD'))
+            elif nxt&0x3b000000==0x39000000 and not nxt&(1<<26) and nxt&(1<<22) and (nxt>>5)&31==reg and nxt&31==reg:
+                scale=(nxt>>30)&3
+                original=page+(((nxt>>10)&4095)<<scale)
+                moved=local(original)
+                require(moved is not None and moved==original+delta and moved%(1<<scale)==0,'LDR target outside its own segment')
+                require((nxt>>22)&3==1,'Review signed load before retargeting')
+                write(npc,struct.pack('<II',encode_adrp(w,npc,moved&~4095),(nxt&~(4095<<10))|(((moved&4095)>>scale)<<10)))
+                adrp.append(dict(pc=hex(npc),value=hex(moved),kind='destructive-LDR'))
             else:
                 require(tail+12<=old['__TEXT_EXEC']['addr']+old['__TEXT_EXEC']['size'],'Veneer overflow')
                 add=0x91000000|((value&4095)<<10)|(reg<<5)|reg

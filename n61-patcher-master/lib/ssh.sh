@@ -343,7 +343,7 @@ ensure_sep() {
   Do not use seputil --load on A9 or bypass this check. Stopping before continuing."
     fi
 
-    if device_is_a9 && [ "${N61_FORCE_SEPUTIL_LOAD:-0}" != "1" ]; then
+    if device_is_a9; then
         die "A9 设备不能在 ramdisk 里用 seputil --load 加载 SEP：内核会卡死
   （黑屏、背光亮、Finder 看不到设备；SSHRD_Script #319）。已中止，APFS 卷未被改动。
   正确做法：让 iBoot 在 ramdisk 启动时加载 SEP（rsepfirmware）：

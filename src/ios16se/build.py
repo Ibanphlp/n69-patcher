@@ -75,6 +75,19 @@ class BuildError(RuntimeError):
     pass
 
 
+def selected_identity(config: BuildConfig):
+    """Samsung N69AP uses j71sap; TSMC N69uAP uses j71tap. Model match is exact."""
+
+    from .soc import SAMSUNG, TSMC
+    target = getattr(config, "target", None) or {}
+    model = str(target.get("board_config", "n69ap")).lower()
+    if model == SAMSUNG.model:
+        return SAMSUNG
+    if model == TSMC.model:
+        return TSMC
+    raise BuildError(f"board_config {model} is not n69ap or n69uap")
+
+
 def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> None:
     """Ensure a device matching `board` is connected and pwned in DFU mode.
 
@@ -85,10 +98,17 @@ def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> Non
     """
     probe = subprocess.run([str(irecovery_bin), "-q"], capture_output=True, text=True)
     output = (probe.stdout or "") + (probe.stderr or "")
-    if board.lower() not in output.lower():
+    from .soc import SocMismatch, identity_from_probe
+    try:
+        identity = identity_from_probe(output)
+    except SocMismatch as error:
         raise BuildError(
-            f"Device '{board}' not detected in DFU mode (irecovery -q output: "
-            f"{output.strip()!r}). Connect the device, enter DFU and re-run."
+            f"Device probe is not an exact N69 model (irecovery -q output: {output.strip()!r}). {error}"
+        ) from error
+    if identity.model != board.lower():
+        raise BuildError(
+            f"Device MODEL is {identity.model} ({identity.cpid_text}), not {board}. "
+            f"Refusing a Samsung artifact set on a TSMC phone and the reverse."
         )
     if "PWND" not in output:
         print(f"  Device not pwned, running gaster pwn...")
@@ -358,8 +378,9 @@ def build_devicetree(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
 
     # Extract N69AP DeviceTree from iOS 15 (native hardware)
     target_ipsw = get_ipsw_path(config, config.component_sources["boot_chain"])
-    target_dt = work_dir / "dt_n69ap.im4p"
-    extract_ipsw_component(target_ipsw, "n69ap", "DeviceTree", target_dt)
+    identity = selected_identity(config)
+    target_dt = work_dir / f"dt_{identity.se_board}.im4p"
+    extract_ipsw_component(target_ipsw, identity.se_board, "DeviceTree", target_dt)
     try:
         source_info = inspect_im4p(target_dt)
     except Im4pError as error:
@@ -382,8 +403,10 @@ def build_devicetree(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
         raise BuildError(f"Native N69AP DeviceTree payload is invalid: {error}") from error
     compatible = property_value(tree.root, "compatible") or b""
     model = property_value(tree.root, "model") or b""
-    if b"N69AP\0" not in compatible or b"iPhone8,4\0" not in compatible or model.rstrip(b"\0") != b"iPhone8,4":
-        raise BuildError("Extracted DeviceTree is not the native N69AP / iPhone8,4 tree")
+    board = identity.se_board.upper().encode() + b"\0"
+    other = (b"N69uAP\0" if identity.se_board == "n69ap" else b"N69AP\0")
+    if board not in compatible or other in compatible or b"iPhone8,4\0" not in compatible or model.rstrip(b"\0") != b"iPhone8,4":
+        raise BuildError(f"Extracted DeviceTree is not the {identity.se_board} / iPhone8,4 tree")
 
     # Sign as rdtr (native N69AP DeviceTree already has correct hardware)
     output = Path(config.output["boot_dt"])
@@ -412,15 +435,18 @@ def build_trustcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     print("\n=== Building TrustCache ===")
     donor_ipsw = get_ipsw_path(config, "donor_ipados16")
     tc_im4p = work_dir / "trustcache.im4p"
-    extract_ipsw_component(donor_ipsw, "j71sap", "StaticTrustCache", tc_im4p)
+    extract_ipsw_component(donor_ipsw, selected_identity(config).donor_board, "StaticTrustCache", tc_im4p)
     img4 = get_img4_tool(im4m)
     raw = work_dir / "trustcache.raw"
     img4.extract(tc_im4p, raw)
     if not raw.is_file() or not raw.stat().st_size:
         raise BuildError("Donor trust cache payload is empty")
     output.parent.mkdir(parents=True, exist_ok=True)
+    # This image is the stock donor cache. publish_trustcache() must replace it
+    # after patch-rootfs and the cryptex, from the binaries that were written.
     img4.wrap_trustcache(raw, output)
-    print("  WARNING: stock donor trust cache only; modified installed binaries need matching cdhashes")
+    (work_dir / "trustcache.stock.raw").write_bytes(raw.read_bytes())
+    print("  TrustCache is still the stock donor cache. Do not boot it.")
     print(f"  TrustCache: {output}")
     return output
 
@@ -496,8 +522,9 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     donor_ipsw = get_ipsw_path(config, "donor_ipados16")
 
     # Extract donor kernelcache
+    identity = selected_identity(config)
     donor_kc_im4p = work_dir / "donor_kc.im4p"
-    extract_ipsw_component(donor_ipsw, "j71sap", "KernelCache", donor_kc_im4p)
+    extract_ipsw_component(donor_ipsw, identity.donor_board, "KernelCache", donor_kc_im4p)
 
     img4 = get_img4_tool(im4m)
     donor_kc_payload_path = work_dir / "donor_kc.payload"
@@ -527,29 +554,34 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
         raise BuildError("Failed to extract kernelcache payload")
     print(f"  Extracted kernel: {donor_kc_raw.stat().st_size} bytes")
 
-    # Apply patches
+    from .kc_patch import patches_for_mode
     mode = os.environ.get("BUILD_MODE", "full")
-
-    patch_names = [
-        name for name, cfg in config.kernelcache_patches.items()
-        if cfg.get("enabled", False)
-    ]
-
-    if mode == "minimal":
-        print("  [Minimal Mode] Stripping out all driver transplants...")
-        essentials = ["remove_ipad_drivers", "generic_security"]
-        patch_names = [p for p in patch_names if p in essentials]
-    elif mode == "safe-minimal":
-        print("  [Safe-Minimal Mode] Applying only mandatory PMU/SEP patches...")
-        essentials = ["remove_ipad_drivers", "generic_security", "pmu_d2255", "sep_legacy"]
-        patch_names = [p for p in patch_names if p in essentials]
+    patch_names = patches_for_mode(mode, config.kernelcache_patches)
+    print(f"  [{mode}] patches: {', '.join(patch_names)}")
+    se_kernel = work_dir / "se_kc.raw"
+    se_ipsw = get_ipsw_path(config, config.component_sources.get("sep", "target_ios15"))
+    se_im4p = work_dir / "se_kc.im4p"
+    extract_ipsw_component(se_ipsw, identity.se_board, "KernelCache", se_im4p)
+    se_payload = work_dir / "se_kc.payload"
+    img4.extract(se_im4p, se_payload)
+    se_bytes = se_payload.read_bytes()
+    if se_bytes[:4] in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
+        se_kernel.write_bytes(se_bytes)
+    else:
+        magic = se_bytes.find(b"complzss")
+        if magic < 0:
+            raise BuildError("SE kernel payload is not a Mach-O or complzss image")
+        stripped = work_dir / "se_kc.stripped"
+        stripped.write_bytes(se_bytes[magic:])
+        decompress_complzss(stripped, se_kernel)
 
     patched_kc = apply_patches(
         kernel_path=donor_kc_raw,
         patch_names=patch_names,
         work_dir=work_dir / "kc_patches",
         im4m=im4m,
-        donor_kc=donor_kc_raw
+        config={"se_kernel": se_kernel},
+        donor_kc=se_kernel,
     )
 
     # Inject N69AP drivers (Disabled for now - trying minimal boot)
@@ -676,6 +708,10 @@ def build_all(config: BuildConfig, im4m: Optional[Path] = None) -> BuildArtifact
         "sep": str(artifacts.sep),
         "kernelcache": str(artifacts.kernelcache),
         "kernelcache_mode": os.environ.get("BUILD_MODE", "full"),
+        "soc_model": selected_identity(config).model,
+        "soc_cpid": selected_identity(config).cpid_text,
+        "donor_board": selected_identity(config).donor_board,
+        "trustcache_is_stock": True,
         "boot_args": config.boot_args["args"],
         "root_partition": config.boot_args["root_partition"],
         "target": config.target["board_config"],
@@ -719,8 +755,21 @@ def boot_flow(artifacts: BuildArtifacts, config: BuildConfig) -> int:
     # Check device identity
     result = subprocess.run([str(irecovery), "-q"], capture_output=True, text=True)
     probe_output = (result.stdout or "") + (result.stderr or "")
-    if result.returncode != 0 or "n69ap" not in probe_output.lower():
-        raise BuildError(f"Device is not N69AP in DFU mode: {probe_output.strip()}")
+    from .soc import SocMismatch, ibec_needs_go, identity_from_probe
+    try:
+        identity = identity_from_probe(probe_output)
+    except SocMismatch as error:
+        raise BuildError(f"Device probe is not a matched N69 board: {error}") from error
+    manifest_model = json.loads(Path(config.output["boot_manifest"]).read_text()).get("soc_model")
+    if manifest_model and manifest_model != identity.model:
+        raise BuildError(
+            f"artifact set is {manifest_model}, probe is {identity.model} ({identity.cpid_text})"
+        )
+    boot_manifest = json.loads(Path(config.output["boot_manifest"]).read_text())
+    if boot_manifest.get("trustcache_is_stock", True):
+        raise BuildError(
+            "boot trust cache is still the stock iPad cache sealed before patch-rootfs; refusing to send it"
+        )
     verify_sep_for_device(config, artifacts.im4m, artifacts.sep, probe_output)
 
     # Pwn if needed
@@ -733,7 +782,10 @@ def boot_flow(artifacts: BuildArtifacts, config: BuildConfig) -> int:
     for img, name, cmd in imgs:
         print(f"  Sending {name}...")
         subprocess.run([str(irecovery), "-f", str(img)], check=True)
-        if cmd and cmd != "go":  # N69AP is A9; iBEC starts on load
+        if cmd == "go":
+            if ibec_needs_go(identity.cpid):
+                subprocess.run([str(irecovery), "-c", "go"], check=True)
+        elif cmd:
             subprocess.run([str(irecovery), "-c", cmd], check=True)
         time.sleep(3 if name in ("iBSS", "iBEC") else 1)
 

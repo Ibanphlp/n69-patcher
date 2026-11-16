@@ -94,84 +94,9 @@ def fast_symbols(k):
 
 def apply(source, donor, work, OLD, NAME, SOURCE_MARKER=None, TARGET_MARKER=None,
           preserve_text_span=True, registration_only=False, full_donor_metadata=True):
-    """Transplant driver NAME from donor into footprint of OLD in source kernel."""
-    OUT = work
-    k, d = KC(source), KC(donor)
-
-    old_segs = k.ksegments(OLD)
-    ds_segs = d.ksegments(NAME)
-    if not old_segs: raise ValueError(f"Target footprint '{OLD}' not found in source kernel")
-    if not ds_segs: raise ValueError(f"Donor driver '{NAME}' not found in donor kernel")
-
-    old = {s['name']: s for s in old_segs}
-    ds = {s['name']: s for s in ds_segs}
-
-    require(not any(OLD in e.get('OSBundleLibraries', {}) for e in k.kexts.values()), 'Orion has dependent bundle')
-    require(NAME not in k.kexts, 'Amp already present')
-
-    dst = {}
-    for n in PARTS:
-        pad = (ds[n]['addr'] - old[n]['addr']) % 4096
-        dst[n] = old[n]['addr'] + (pad if ds[n]['size'] + pad <= old[n]['size'] else 0)
-        if preserve_text_span and n == '__TEXT':
-            dst[n] = old[n]['addr']
-        require(dst[n] + ds[n]['size'] <= old[n]['addr'] + old[n]['size'], 'Image does not fit ' + n)
-
-    out = bytearray(k.data)
-    def write(a, blob):
-        require(any(old[n]['addr'] <= a and a + len(blob) <= old[n]['addr'] + old[n]['size'] for n in PARTS),
-                'Write outside reclaimed Orion allocation ' + hex(a))
-        off = k.offset(a)
-        out[off:off+len(blob)] = blob
-
-    for n in PARTS:
-        write(old[n]['addr'], bytes(old[n]['size']))
-        write(dst[n], d.read(ds[n]['addr'], ds[n]['size']))
-
-    kb, kr = relocations(k)
-    db, dr = relocations(d)
-
-    def local(a):
-        for n in PARTS:
-            s = ds[n]
-            if s['addr'] <= a < s['addr'] + s['size']:
-                return dst[n] + a - s['addr']
-        return None
-
-    newrel = []
-    for off in kr:
-        va = kb + off
-        if not any(old[n]['addr'] <= va < old[n]['addr'] + old[n]['size'] for n in PARTS):
-            newrel.append(off)
-
-    for off in dr:
-        va = db + off
-        if local(va) is not None:
-            newrel.append(k.offset(local(va)) - k.offset(kb))
-
-    packed = struct.pack('<I', len(newrel)) + struct.pack('<' + 'I' * len(newrel), *newrel)
-
-    entry = copy.deepcopy(d.kexts[NAME])
-    entry.update(_PrelinkExecutableLoadAddr=dst['__TEXT'], _PrelinkExecutableSize=ds['__TEXT']['size'])
-    if registration_only:
-        entry.pop('IOKitPersonalities', None)
-        entry.pop('OSBundleRequired', None)
-
-    xml, inlined = xml_replace_entry(k.xml, OLD, entry)
-
-    xml, count = re.subn(rb'(<key>_PrelinkLinkKASLROffsets</key><data>)[A-Za-z0-9+/=\s]*(</data>)',
-                         lambda m: m[1] + base64.b64encode(packed) + m[2], xml)
-    require(count == 1, 'Missing KASLR offset array')
-
-    info = next(s for s in k.segments if s['name'] == '__PRELINK_INFO')
-    require(len(xml) <= info['size'], 'Prelink XML exceeds existing allocation')
-    at = k.offset(info['addr'])
-    out[at:at+info['size']] = xml.ljust(info['size'], b'\0')
-
-    if SOURCE_MARKER:
-        ma = k.data.find(SOURCE_MARKER)
-        if ma != -1:
-            out[ma:ma+len(SOURCE_MARKER)] = (TARGET_MARKER or SOURCE_MARKER)
-
-    (OUT / 'kernel_sevenup_transplant.raw').write_bytes(out)
-    return OUT / 'kernel_sevenup_transplant.raw'
+    """The stripped copier is not a transplant. Use SevenUP's engine."""
+    raise RuntimeError(
+        "src/ios16se/sevenup/kernel_transplant.apply copies segments without rebinding "
+        "relocations or ADRP. Call ios16se.driver_transplant.transplant_footprint, "
+        "which uses SevenUP's kernel_transplant.apply and reviewed bindings."
+    )

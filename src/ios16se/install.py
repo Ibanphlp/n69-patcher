@@ -246,10 +246,14 @@ def send_boot_chain(config: InstallConfig) -> bool:
 
     # Check DFU mode
     result = subprocess.run([str(irecovery), "-q"], capture_output=True, text=True)
-    if "n69ap" not in result.stdout.lower():
-        print(f"[x] Device not detected as N69AP in DFU mode")
+    from .soc import SocMismatch, identity_from_probe
+    try:
+        identity = identity_from_probe((result.stdout or "") + (result.stderr or ""))
+    except SocMismatch as error:
+        print(f"[x] Device probe is not an exact n69ap/n69uap match: {error}")
         print(f"    Output: {result.stdout.strip()}")
         return False
+    print(f"[i] Device {identity.model} {identity.cpid_text}")
 
     if "PWND" not in result.stdout:
         print("[i] Device not pwned, running gaster pwn...")
