@@ -53,6 +53,10 @@ class SocTests(unittest.TestCase):
         # A substring of the TSMC model must not select the Samsung board.
         with self.assertRaises(SocMismatch):
             identity_from_probe("CPID: 0x8003\nMODEL: n69uap\n".replace("MODEL: n69uap", "MODEL: n69"))
+        # The connected TSMC SE reports MODEL n69ap with CPID 0x8003.
+        tsmc = identity_from_probe("CPID: 0x8003\nMODEL: n69ap\n")
+        self.assertEqual(tsmc.model, "n69uap")
+        self.assertEqual(tsmc.donor_board, "j71tap")
 
     def test_go_and_seputil_and_ramdisk_sep(self):
         self.assertFalse(ibec_needs_go(0x8000))

@@ -62,7 +62,14 @@ def identity_for(model: str, cpid: int) -> BoardIdentity:
 
 def identity_from_probe(text: str) -> BoardIdentity:
     model, cpid = parse_probe(text)
-    return identity_for(model, cpid)
+    try:
+        return identity_for(model, cpid)
+    except SocMismatch:
+        # This TSMC SE prints MODEL n69ap while CPID is 0x8003. The CPID is the
+        # silicon; the donor is j71tap, not the Samsung j71sap set.
+        if model == SAMSUNG.model and cpid == TSMC.cpid:
+            return TSMC
+        raise
 
 
 def require_artifact_identity(artifact_model: str, probe_text: str) -> BoardIdentity:
