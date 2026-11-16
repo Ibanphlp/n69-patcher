@@ -518,10 +518,25 @@ stage_finish() {
             die "systembag 缺失：加密 DataB 需要 SEP 正常加载并成功执行 create_systembag（检查上面的 SEP/ensure_systembag 输出）"
     else
         keybags="$(state_dir)/keybags.tar"
-        [ -f "$keybags" ] || die "缺少 ${keybags}（--data-protection none 时需自备越狱 iOS12 的 keybags）"
-        log "keybags → DataB…"
-        ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt7" <"$keybags" ||
-            die "keybags 写入失败"
+        if [ -f "$keybags" ]; then
+            log "keybags → DataB…"
+            ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt7" <"$keybags" ||
+                die "keybags 写入失败"
+        elif [ -n "${T_MNT_DATA_STOCK:-}" ]; then
+            # The stock systembag is wrapped by this device's effaceable key, so
+            # copying it read-only from the stock Data volume needs no ramdisk SEP.
+            log "Copying stock keybags from disk0s1s${T_MNT_DATA_STOCK} → DataB…"
+            rsh "/sbin/mount | /usr/bin/grep -q ' on /mnt2 ' && ! /sbin/mount | /usr/bin/grep -q 'disk0s1s${T_MNT_DATA_STOCK} on /mnt2 ' && exit 1;
+                /sbin/mount | /usr/bin/grep -q 'disk0s1s${T_MNT_DATA_STOCK} on /mnt2 ' || /sbin/mount_apfs -o ro /dev/disk0s1s${T_MNT_DATA_STOCK} /mnt2" ||
+                die "Cannot mount the stock Data volume read-only at /mnt2"
+            rsh "test -s /mnt2/keybags/systembag.kb" ||
+                { umount_vols /mnt2; die "Stock systembag not found at /mnt2/keybags/systembag.kb"; }
+            rsh "mkdir -p /mnt7/keybags && /bin/cp -a /mnt2/keybags/. /mnt7/keybags/ && test -s /mnt7/keybags/systembag.kb" ||
+                { umount_vols /mnt2; die "Stock keybag copy failed"; }
+            umount_vols /mnt2
+        else
+            die "缺少 ${keybags}（--data-protection none 时需自备越狱 iOS12 的 keybags）"
+        fi
     fi
 
     log "$(rsh "ls -ln /mnt6/usr/standalone/firmware/sep-firmware.img4 /mnt7/keybags/systembag.kb")"

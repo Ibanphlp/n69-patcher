@@ -24,7 +24,7 @@ T_ROOT_PART = 8
 T_VOL_CREATE = "SystemB DataB"
 T_ROLES = "8:0x1 9:0x40"  # s8=SystemB(System), s9=DataB(Data); s4=Update, s5=xART, s6=Preboot, s7=Hardware 勿动
 
-T_DATA_PROTECTION = "encrypted"
+T_DATA_PROTECTION = "none"
 # iOS15 的 SystemA/DataA 占着 System(0x1)/Data(0x40) role；iOS16 按 role 找 Data 卷，需降级旧持有者
 T_ROLES_DEMOTE_OLD = 1
 T_MNT_SYSTEM_B = 8
