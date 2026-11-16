@@ -249,7 +249,7 @@ apfs_role_name() {   # 入参为十进制 role
 apfs_describe() {   # idx blockfile paddr
     local idx="$1" blk="$2" paddr="$3" role name flags used ck enc
     role="$(rd_u16 "$blk" $APFS_ROLE_OFF)"
-    name="$(dd if="$blk" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
+    name="$(apfs_block_name "$blk")"
     flags="$(rd_u64 "$blk" $APFS_FS_FLAGS_OFF)"
     used=$(( $(rd_u64 "$blk" $APFS_ALLOC_OFF) * APFS_BS ))
     if [ $(( flags & 1 )) -ne 0 ]; then enc="UNENCRYPTED"; else enc="encrypted"; fi
@@ -531,12 +531,19 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
     fi
 }
 
+# 卷名是以 NUL 结尾的 C 字符串。删掉全部 NUL 会把结束符后面的残留字节拼进来，
+# 于是名字看起来是 SystemB，比较却失败。
+apfs_block_name() {   # blockfile
+    dd if="$1" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null |
+        LC_ALL=C awk 'BEGIN { RS="\0"; ORS="" } { gsub(/\r/, ""); sub(/[[:space:]]+$/, ""); print; exit }'
+}
+
 # 槽位 N 的卷名
 apfs_slot_name() {   # n
     local n="$1"
     apfs_volumes
     [ -n "${APFS_V_BLOCK[$n]:-}" ] || return 1
-    dd if="${APFS_V_BLOCK[$n]}" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000'
+    apfs_block_name "${APFS_V_BLOCK[$n]}"
 }
 
 # 破坏性阶段前确认目标槽位真的是 SystemB / DataB，绝不碰原有卷（Update/xART/Preboot/...）
