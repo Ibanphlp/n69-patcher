@@ -459,6 +459,31 @@ stage_fix_icons() {
     ok "图标修复完成（${n} 个文件）。重新 boot 进 iOS13 后生效。"
 }
 
+# Stock Data is role 0x40. T_MNT_DATA_STOCK is used only when that slot really
+# has the Data role; otherwise the single other Data-role volume is selected.
+resolve_stock_data_slot() {
+    local configured="${T_MNT_DATA_STOCK:-}" role found="" i
+    apfs_volumes || die "无法读取 APFS 卷，不能定位 stock Data"
+    if [ -n "$configured" ] && [ -n "${APFS_V_BLOCK[$configured]:-}" ]; then
+        role="$(rd_u16 "${APFS_V_BLOCK[$configured]}" "$APFS_ROLE_OFF")"
+        if [ "$role" = "64" ] && [ "$configured" != "${T_MNT_DATA_B:-}" ]; then
+            printf '%s\n' "$configured"
+            return 0
+        fi
+    fi
+    for i in "${APFS_V_IDX[@]}"; do
+        [ "$i" = "${T_MNT_DATA_B:-}" ] && continue
+        role="$(rd_u16 "${APFS_V_BLOCK[$i]}" "$APFS_ROLE_OFF")"
+        if [ "$role" = "64" ]; then
+            [ -z "$found" ] || die "不止一个 stock Data 卷（role 0x40）：s${found} 和 s${i}"
+            found="$i"
+        fi
+    done
+    [ -n "$found" ] || die "没有 role 0x40 的 stock Data 卷，拒绝把 keybag 拷到错误的卷"
+    log "stock Data 卷是 disk0s1s${found}（role 0x40），不是配置的 s${configured:-?}" >&2
+    printf '%s\n' "$found"
+}
+
 # ---------- finish（rootfs.finish）----------
 stage_finish() {
     local apfs14 encrypted=0 keybags
@@ -522,12 +547,13 @@ stage_finish() {
             log "keybags → DataB…"
             ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt7" <"$keybags" ||
                 die "keybags 写入失败"
-        elif [ -n "${T_MNT_DATA_STOCK:-}" ]; then
+        elif stock_data="$(resolve_stock_data_slot)"; then
             # The stock systembag is wrapped by this device's effaceable key, so
             # copying it read-only from the stock Data volume needs no ramdisk SEP.
-            log "Copying stock keybags from disk0s1s${T_MNT_DATA_STOCK} → DataB…"
-            rsh "/sbin/mount | /usr/bin/grep -q ' on /mnt2 ' && ! /sbin/mount | /usr/bin/grep -q 'disk0s1s${T_MNT_DATA_STOCK} on /mnt2 ' && exit 1;
-                /sbin/mount | /usr/bin/grep -q 'disk0s1s${T_MNT_DATA_STOCK} on /mnt2 ' || /sbin/mount_apfs -o ro /dev/disk0s1s${T_MNT_DATA_STOCK} /mnt2" ||
+            # resolve_stock_data_slot uses APFS role 0x40 when s2 is not Data.
+            log "Copying stock keybags from disk0s1s${stock_data} → DataB…"
+            rsh "/sbin/mount | /usr/bin/grep -q ' on /mnt2 ' && ! /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' && exit 1;
+                /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' || /sbin/mount_apfs -o ro /dev/disk0s1s${stock_data} /mnt2" ||
                 die "Cannot mount the stock Data volume read-only at /mnt2"
             rsh "test -s /mnt2/keybags/systembag.kb" ||
                 { umount_vols /mnt2; die "Stock systembag not found at /mnt2/keybags/systembag.kb"; }

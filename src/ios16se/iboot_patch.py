@@ -189,7 +189,7 @@ def embed_boot_args(ibec_path: Path, boot_args: str, partition: int, output: Pat
     patched_data = patch_bootargs(raw_data, boot_args)
 
     # Patch root partition (remove if part of boot args)
-    # The "rd=disk0s1s4" in boot args handles this, but double-check
+    # Root is disk0s1s8 (SystemB). disk0s1s4 is Update and is not the root.
 
     # Write patched raw
     patched_raw = Path(str(ibec_raw) + '.patched')

@@ -39,7 +39,7 @@ IPAD5_16_7_16 = FirmwareRequirement(
     product_version="16.7.16",
     build="20H392",
     sha1_digest="0c4849129810d926355952e0bd749740304707e8",
-    accepted_boards=frozenset({"j71sap", "j72tap"}),
+    accepted_boards=frozenset({"j71sap", "j71tap"}),
 )
 
 REQUIREMENTS = {requirement.role: requirement for requirement in (TARGET_15_8_8, IPAD5_16_7_16)}

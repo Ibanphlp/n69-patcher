@@ -1,4 +1,10 @@
-# N69AP iOS 16 Mac Pipeline - Complete ✅
+# N69AP iOS 16 Mac Pipeline
+
+SpringBoard is unproven. Do not treat this file as a completed boot.
+
+What is structurally built on `v0/sevenup-preboot-sep`: the Preboot SEP image is copied unchanged, the ramdisk stays SEP-off for unencrypted DataB, and the kernel builder can run reviewed SevenUP transplants for the D2255 PMU, Chestnut, Pinot and AppleMultitouchSPI. A structural pass means the engine accepted the bindings. It does not mean a phone reached SpringBoard. That stays unproven until a serial log shows the SE PMU probe, the Pinot framebuffer, and launchd.
+
+Audio, the CS35L19 amplifier, the C26 charger, Wi-Fi and haptics are not on the boot path.
 
 ## Summary
 

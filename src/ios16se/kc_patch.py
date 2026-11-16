@@ -84,14 +84,20 @@ class RemoveIpadDriversPatch(KernelPatch):
         xml = bytes(data[fileoff:fileoff + filesize]).rstrip(b'\0')
         # Expand only references to definitions in the entries being removed.
         # Inlining every IDREF makes the fixed-size prelink segment overflow.
+        from .driver_transplant import LEFTOVER_DP, protected_footprints
+        protected = protected_footprints(ctx.applied_patches)
         ranges = []
         identifiers = re.findall(rb'<key>CFBundleIdentifier</key><string>([^<]+)</string>', xml)
-        for short_name in self.IPAD_DRIVERS:
-            matches = [name.decode() for name in identifiers
-                       if name.decode().rsplit('.', 1)[-1] == short_name]
-            for name in matches:
-                ranges.append(entry_range(xml, name))
-                print(f"    Removing iPad driver entry: {name}")
+        present = {name.decode() for name in identifiers}
+        for bundle in LEFTOVER_DP:
+            if bundle in protected:
+                raise RuntimeError(f"remove_ipad_drivers would delete transplant footprint {bundle}")
+            if bundle not in present:
+                continue
+            ranges.append(entry_range(xml, bundle))
+            print(f"    Removing iPad driver entry: {bundle}")
+        if not ranges:
+            raise RuntimeError("remove_ipad_drivers found no leftover DisplayPort personalities")
         xml = self._remove_entries(xml, ranges)
 
         if len(xml) > filesize:
@@ -155,11 +161,10 @@ class RemoveIpadDriversPatch(KernelPatch):
                     return fileoff, filesize
         return None
 
-# Imports and dummy classes for structure - will be fleshed out
-from .kc_patch_n69 import (
-    TouchSpin69Patch,
-    AudioCS35L19Patch, ChargerC26Patch,
-    SepLegacyPatch, VibrationDrv2604Patch,
+from .kc_patch_drivers import (
+    AudioCS35L19Patch, AudioCS42L71Patch, ChargerC26Patch, ChestnutPatch,
+    DisplayPinotPatch, PmuD2255Patch, SepLegacyPatch, TouchSpin69Patch,
+    VibrationDrv2604Patch, WifiBcmPatch,
 )
 
 
@@ -229,46 +234,80 @@ class ComplzssRepackPatch(KernelPatch):
         # TODO: call mkcomplzss
         return ctx.kernel_path
 
+# safe-minimal is the PMU plus the reviewed SEP shim. full adds Chestnut,
+# Pinot and SPIN69. minimal is only the AMFI/img4/root-hash/seal/developer
+# patches. Audio, charger, Wi-Fi and haptics stay out of every boot mode.
+BOOT_MODES = {
+    "minimal": ("generic_security",),
+    "safe-minimal": ("generic_security", "pmu_d2255", "sep_legacy"),
+    "full": ("generic_security", "pmu_d2255", "sep_legacy", "chestnut",
+             "display_pinot", "touch_spin69", "remove_ipad_drivers"),
+}
+
+
+def patches_for_mode(mode: str, enabled: dict | None = None) -> list[str]:
+    """Return the ordered patch names for one boot mode.
+
+    ``enabled`` is the profile table. A mode never gains a patch the profile
+    turned off, and it never gains audio, charger, Wi-Fi or haptics.
+    """
+
+    if mode not in BOOT_MODES:
+        raise RuntimeError(f"Unsupported kernel mode: {mode}")
+    selected = list(BOOT_MODES[mode])
+    if enabled is not None:
+        selected = [name for name in selected if enabled.get(name, {}).get("enabled", True)]
+    blocked = {"audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm", "vibration_drv2604"}
+    if blocked.intersection(selected):
+        raise RuntimeError("audio, charger, Wi-Fi and haptics are not on the boot path")
+    return selected
+
+
 def apply_patches(kernel_path, patch_names, work_dir, im4m=None, config=None, donor_kc=None) -> Path:
-    from .kc_patch_drivers import (
-        DisplayPinotPatch, AudioCS42L71Patch, PmuD2255Patch, WifiBcmPatch,
-        AudioCS35L19Patch, ChargerC26Patch
-    )
-    unsafe = set(patch_names) - {"generic_security", "remove_ipad_drivers"}
-    if unsafe:
-        raise RuntimeError("Unvalidated N69 hardware/SEP patches are disabled: " + ", ".join(sorted(unsafe)))
     registry = PatchRegistry()
+    se_kernel = donor_kc
+    if config and config.get("se_kernel"):
+        se_kernel = Path(config["se_kernel"])
     patches = [
         RemoveIpadDriversPatch(), GenericSecurityPatch(),
-        PmuD2255Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        TouchSpin69Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        DisplayPinotPatch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        AudioCS42L71Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        AudioCS35L19Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        ChargerC26Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        SepLegacyPatch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        WifiBcmPatch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
-        VibrationDrv2604Patch(Path("artifacts/n69ap-15.8.8/KernelCache.raw")),
+        PmuD2255Patch(se_kernel),
+        ChestnutPatch(se_kernel),
+        DisplayPinotPatch(se_kernel),
+        TouchSpin69Patch(se_kernel),
+        AudioCS42L71Patch(se_kernel),
+        AudioCS35L19Patch(se_kernel),
+        ChargerC26Patch(se_kernel),
+        SepLegacyPatch(se_kernel),
+        WifiBcmPatch(se_kernel),
+        VibrationDrv2604Patch(se_kernel),
         WatchtowerPatch(donor_kc),
         ComplzssRepackPatch(),
     ]
-
-    for p in patches: registry.register(p)
-    ordered = ["remove_ipad_drivers", "generic_security", "pmu_d2255", "touch_spin69",
-               "display_pinot", "audio_cs42l71", "audio_cs35l19", "charger_c26",
-               "sep_legacy", "wifi_bcm", "vibration_drv2604", "watchtower", "complzss_repack"]
-    ordered = [n for n in ordered if n in patch_names]
-    ctx = PatchContext(kernel_path, work_dir, im4m, config or {}, donor_kc=donor_kc)
+    for patch in patches:
+        registry.register(patch)
+    ordered = ["generic_security", "pmu_d2255", "chestnut",
+               "display_pinot", "touch_spin69", "sep_legacy", "remove_ipad_drivers",
+               "audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm",
+               "vibration_drv2604", "watchtower", "complzss_repack"]
+    ordered = [name for name in ordered if name in patch_names]
+    ctx = PatchContext(kernel_path, work_dir, im4m, config or {}, donor_kc=se_kernel)
     work_dir.mkdir(parents=True, exist_ok=True)
-
-    # Ensure donor_kc is set in context for dependent patches
-    if donor_kc:
-        ctx.donor_kc = donor_kc
-    curr = kernel_path
+    if se_kernel and Path(se_kernel).is_file() and Path(se_kernel) != Path(kernel_path):
+        from .driver_transplant import BindingBook
+        ctx.config["bindings"] = BindingBook(Path(se_kernel), Path(kernel_path))
+    current = kernel_path
     for name in ordered:
         patch = registry.get(name)
-        if patch and patch.can_apply(ctx):
-            curr = patch.apply(ctx)
-            ctx.kernel_path = curr
-            ctx.applied_patches.append(name)
-    return curr
+        if patch is None:
+            raise RuntimeError(f"unknown kernel patch {name}")
+        if not patch.can_apply(ctx):
+            raise RuntimeError(f"{name} requirements are not met: {patch.requires}")
+        produced = patch.apply(ctx)
+        if produced is None or not Path(produced).is_file():
+            raise RuntimeError(f"{name} did not write a kernel")
+        if name not in {"watchtower", "complzss_repack"} and Path(produced).read_bytes() == Path(current).read_bytes():
+            raise RuntimeError(f"{name} left the kernel byte-identical")
+        current = produced
+        ctx.kernel_path = current
+        ctx.applied_patches.append(name)
+    return current

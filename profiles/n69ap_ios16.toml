@@ -66,18 +66,17 @@ generic_security = { enabled = true, profile = "j96_clean" }
 # 3. Kernel info offset cache (for checkra1n userland)
 # kerninfo = { enabled = false, profile = "kerninfo" }
 
-# 4. N69 hardware ports stay disabled until each transplant has a validated
-# kernel output and target hardware/ABI compatibility evidence. The current
-# trial can transplant PMU, display, and audio bundles, but C26 does not fit;
-# touch and haptics are placeholders, and a successful transplant alone does
-# not establish runtime compatibility.
-pmu_d2255 = { enabled = false, profile = "pmu_d2255" }
-touch_spin69 = { enabled = false, profile = "touch_spin69" }
-display_pinot = { enabled = false, profile = "display_pinot" }
+# Boot path: safe-minimal is PMU + SEP; full adds Chestnut, Pinot and SPIN69.
+# A structural transplant is not a SpringBoard boot. Audio, charger, Wi-Fi
+# and haptics stay disabled until their own tests pass.
+pmu_d2255 = { enabled = true, profile = "pmu_d2255" }
+touch_spin69 = { enabled = true, profile = "touch_spin69" }
+display_pinot = { enabled = true, profile = "display_pinot" }
+chestnut = { enabled = true, profile = "chestnut" }
 audio_cs42l71 = { enabled = false, profile = "audio_cs42l71" }
 audio_cs35l19 = { enabled = false, profile = "audio_cs35l19" }
 charger_c26 = { enabled = false, profile = "charger_c26" }
-sep_legacy = { enabled = false, profile = "sep_legacy" }
+sep_legacy = { enabled = true, profile = "sep_legacy" }
 wifi_bcm = { enabled = false, profile = "wifi_bcm" }
 vibration_drv2604 = { enabled = false, profile = "vibration_drv2604" }
 

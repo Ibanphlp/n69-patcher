@@ -73,13 +73,13 @@ printf 'verify\n' >> "$TEST_LOG"
     def test_missing_capture_is_automatic_and_precedes_build(self):
         result, events = self.run_installer(ramdisk=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(events[:6], ["generate:15.8.8", "ramdisk:0", "capture-sep:", "verify", "build:full", "ramdisk:1"])
+        self.assertEqual(events[:6], ["generate:15.8.8", "ramdisk:0", "capture-sep:", "verify", "build:full", "ramdisk:0"])
         self.assertIn("volumes:", events)
 
     def test_resume_captures_without_reboot_and_verifies_before_build(self):
         result, events = self.run_installer(ramdisk=False, resume=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(events[:5], ["capture-sep:", "verify", "generate:15.8.8", "build:full", "ramdisk:1"])
+        self.assertEqual(events[:5], ["capture-sep:", "verify", "generate:15.8.8", "build:full", "ramdisk:0"])
         self.assertIn("volumes:", events)
 
     def test_resume_capture_failure_never_builds_or_writes_volumes(self):
@@ -95,7 +95,7 @@ printf 'verify\n' >> "$TEST_LOG"
     def test_existing_capture_is_verified_before_build(self):
         result, events = self.run_installer(captured=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(events[:3], ["verify", "build:full", "ramdisk:1"])
+        self.assertEqual(events[:3], ["verify", "build:full", "ramdisk:0"])
         self.assertNotIn("capture-sep:", events)
 
     def test_capture_failure_never_builds_or_writes_volumes(self):

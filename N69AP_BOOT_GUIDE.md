@@ -1,6 +1,8 @@
 # N69AP iOS 16 Tethered Boot Pipeline
 
-Complete end-to-end solution for iPhone SE 1st Gen (N69AP) iOS 16.7.16 tethered boot.
+Tethered boot path for iPhone SE 1st gen (N69AP and N69uAP) on iOS 16.7.16.
+SpringBoard is unproven until a serial log shows the SE PMU probe, the Pinot
+framebuffer, and launchd. A green host test is not that log.
 
 ## Overview
 
@@ -33,10 +35,11 @@ If multiple slots are present, set `N69_PREBOOT_HASH` to the desired 96-characte
 
 ### Quick Start
 ```bash
-# Build safe-minimal boot images (PMU + SEP patches only)
-./run_boot.sh
-
-# Build full driver port mode
+# safe-minimal builds the PMU transplant and the reviewed SEP request shim.
+# full adds Chestnut, Pinot and the SPIN69 personality.
+# Neither mode has been shown to reach SpringBoard. A host-side structural
+# pass is not a serial log of the SE PMU, the Pinot framebuffer, or launchd.
+./run_boot.sh safe-minimal
 ./run_boot.sh full
 
 # Build and boot device (device must be in DFU mode)
@@ -137,7 +140,7 @@ This verifies:
 ## Troubleshooting
 
 ### Device reboots to recovery mode
-- Check boot-args: `rd=disk0s1s4` must match actual root partition
+- Check boot-args: `rd=disk0s1s8` must match SystemB. `disk0s1s4` is Update, not the root.
 - Verify IM4M signing: `img4 -i boot_KC.img4 -M state/IM4M.bin` should work
 
 ### Kernel panics

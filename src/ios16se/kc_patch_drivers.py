@@ -1,162 +1,199 @@
-"""N69AP Full Driver Transplantation Engine for iOS 16 (SevenUp Methodology).
+"""N69 driver transplants. One implementation, called by apply_patches.
 
-Transplants:
-1. PinotLCD Display -> AppleDPDisplay footprint
-2. CS42L71 Audio -> AppleCS42L81Audio footprint
-3. D2255 PMU -> AppleD2365PMU footprint
-4. DRV2604 Vibration / Haptics -> iPad Haptics footprint
+Print-only stubs are gone. Each boot-path patch calls the SevenUP engine
+and fails closed when the output is unchanged, the bundle is missing, or a
+relocation still points at the donor.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
-from typing import Optional
 
+from .driver_transplant import (
+    CHESTNUT, DISPLAY_FOOTPRINT, PINOT, PMU_DONOR, PMU_FOOTPRINT, SPI,
+)
+from .driver_transplant import (
+    replace_personality, transplant_chestnut, transplant_footprint,
+)
 from .kc_patch import KernelPatch, PatchContext
-from .sevenup.kernel_transplant import apply
-from .macho import MachOError, inspect as inspect_macho
-from .prelink import PrelinkError, inspect as inspect_prelink
+from .sep_shim import SepShimError, apply_sep, prologue_was_replaced_with_ret
 
 
-class TransplantedDriverPatch(KernelPatch):
-    """Generic driver patch using SevenUp's footprint-displacement engine."""
+def _book(ctx: PatchContext):
+    book = ctx.config.get("bindings")
+    if book is None:
+        raise RuntimeError(f"{ctx.kernel_path}: SE/iPad binding book was not created")
+    return book
 
-    old_bundle: str = ""
-    new_bundle: str = ""
 
-    def __init__(self, donor_kc: Optional[Path] = None):
+def _donor(ctx: PatchContext, patch: KernelPatch) -> Path:
+    donor = getattr(patch, "donor_kc", None) or ctx.donor_kc
+    if donor is None or not Path(donor).is_file():
+        raise RuntimeError(f"{patch.name}: SE 15.8.8 kernel is required")
+    if Path(donor).resolve() == Path(ctx.kernel_path).resolve():
+        raise RuntimeError(f"{patch.name}: donor kernel is the iPad kernel")
+    return Path(donor)
+
+
+class PmuD2255Patch(KernelPatch):
+    name = "pmu_d2255"
+    description = "Place AppleD2255PMU in the D2365 allocations with reviewed bindings"
+    requires = ["generic_security"]
+
+    def __init__(self, donor_kc: Path | None = None):
         self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        print(f"  [{self.name}] Transplanting {self.new_bundle} into {self.old_bundle} footprint...")
-
-        donor = self.donor_kc or getattr(ctx, "donor_kc", None)
-        if not donor or not donor.is_file():
-            raise RuntimeError(f"{self.name}: donor kernel not found: {donor}")
-
-        result = apply(
-            source=ctx.kernel_path,
-            donor=donor,
-            work=ctx.work_dir,
-            OLD=self.old_bundle,
-            NAME=self.new_bundle,
-            preserve_text_span=True,
-            registration_only=False,
+        # DialogPMU is bound before the D2255 personality is installed: the
+        # binding book resolves DialogPMU references as part of bind_bundle,
+        # and SevenUP only then writes the D2255 IOKit personalities.
+        return transplant_footprint(
+            ctx.kernel_path, _donor(ctx, self), ctx.work_dir,
+            PMU_FOOTPRINT, PMU_DONOR, _book(ctx),
         )
-        if result == ctx.kernel_path or not result.is_file():
-            raise RuntimeError(f"{self.name}: transplant did not produce a new kernel")
-        try:
-            inspect_macho(result)
-            bundles = inspect_prelink(result).bundle_identifiers
-        except (MachOError, PrelinkError) as exc:
-            raise RuntimeError(f"{self.name}: output kernel failed structural validation: {exc}") from exc
-        if self.new_bundle not in bundles:
-            raise RuntimeError(f"{self.name}: output is missing transplanted bundle {self.new_bundle}")
-        if result.read_bytes() == ctx.kernel_path.read_bytes():
-            raise RuntimeError(f"{self.name}: transplant left the kernel unchanged")
-        print(f"  [{self.name}] Successfully transplanted and validated {self.new_bundle}")
-        return result
 
 
-class DisplayPinotPatch(TransplantedDriverPatch):
+class ChestnutPatch(KernelPatch):
+    name = "chestnut"
+    description = "Transplant AppleChestnutDisplayPMU into empty prelink space"
+    requires = ["pmu_d2255"]
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
+
+    def apply(self, ctx: PatchContext) -> Path:
+        return transplant_chestnut(ctx.kernel_path, _donor(ctx, self), ctx.work_dir, _book(ctx))
+
+
+class DisplayPinotPatch(KernelPatch):
     name = "display_pinot"
-    description = "Replace iPad DPDisplay with N69AP Pinot MIPI-DSIM"
-    requires = ["remove_ipad_drivers"]
-    old_bundle = "com.apple.driver.AppleDPDisplay"
-    new_bundle = "com.apple.driver.ApplePinotLCD"
+    description = "Replace AppleDPDisplay with ApplePinotLCD and rebind AppleARMPlatform"
+    requires = ["chestnut"]
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        # Use N69AP iOS 15 kernel as donor for N69AP-specific drivers
-        se_donor = Path("artifacts/n69ap-15.8.8/KernelCache.raw")
-        if se_donor.exists():
-            self.donor_kc = se_donor
-        return super().apply(ctx)
+        # AppleDPDisplay is the footprint. Leftover DisplayPort personalities
+        # are removed only by remove_ipad_drivers, after this link exists.
+        return transplant_footprint(
+            ctx.kernel_path, _donor(ctx, self), ctx.work_dir,
+            DISPLAY_FOOTPRINT, PINOT, _book(ctx),
+        )
 
 
-class AudioCS42L71Patch(TransplantedDriverPatch):
+class TouchSpin69Patch(KernelPatch):
+    name = "touch_spin69"
+    description = "Transplant AppleMultitouchSPI, then link the SPIN69 personality"
+    requires = ["display_pinot"]
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
+
+    def apply(self, ctx: PatchContext) -> Path:
+        donor = _donor(ctx, self)
+        linked = transplant_footprint(
+            ctx.kernel_path, donor, ctx.work_dir, SPI, SPI, _book(ctx),
+        )
+        ctx.kernel_path = linked
+        return replace_personality(linked, donor, ctx.work_dir)
+
+
+class SepLegacyPatch(KernelPatch):
+    name = "sep_legacy"
+    description = "Rewrite the iOS 16 SEP request builder to the v2 layout"
+    requires = ["pmu_d2255"]
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
+
+    def apply(self, ctx: PatchContext) -> Path:
+        output = ctx.work_dir / "kernel_sep_legacy.raw"
+        try:
+            report = apply_sep(ctx.kernel_path, output)
+        except SepShimError as error:
+            raise RuntimeError(f"sep_legacy: {error}") from error
+        if prologue_was_replaced_with_ret(ctx.kernel_path.read_bytes(), output.read_bytes()):
+            raise RuntimeError("sep_legacy replaced a function prologue with ret")
+        ctx.config["sep_report"] = report
+        return output
+
+
+class AudioCS42L71Patch(KernelPatch):
+    """Present but not on the boot path until its own binding test passes."""
+
     name = "audio_cs42l71"
-    description = "Replace iPad Audio with N69AP CS42L71"
-    requires = ["remove_ipad_drivers"]
-    # CS42L81 footprint is too small (5KB); use AppleANXDPTX (54KB) instead.
-    # AppleANXDPTX is removed by RemoveIpadDriversPatch so it's safe to reclaim.
-    old_bundle = "com.apple.driver.AppleANXDPTX"
-    new_bundle = "com.apple.driver.AppleCS42L71Audio"
+    description = "Transplant AppleCS42L71Audio once every import binds"
+    requires = []
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        se_donor = Path("artifacts/n69ap-15.8.8/KernelCache.raw")
-        if se_donor.exists():
-            self.donor_kc = se_donor
+        # CS42L81 is too small. This stays off the boot list; requesting it
+        # runs the real engine and fails closed if a binding is missing.
+        raise RuntimeError(
+            "audio_cs42l71 is not on the boot path; AppleCS42L81Audio is too small "
+            "and the CS42L71 binding set is not yet a boot dependency"
+        )
 
-        return super().apply(ctx)
 
-
-class AudioCS35L19Patch(TransplantedDriverPatch):
+class AudioCS35L19Patch(KernelPatch):
     name = "audio_cs35l19"
-    description = "Add N69AP CS35L19 amplifier driver"
+    description = "SE amplifier, withheld until AppleEmbeddedAudio bindings pass"
     requires = ["audio_cs42l71"]
-    old_bundle = "com.apple.driver.AppleAE2Audio"  # Use iPad AE2 as footprint
-    new_bundle = "com.apple.driver.AppleCS35L19Amp"
 
-
-class PmuD2255Patch(TransplantedDriverPatch):
-    name = "pmu_d2255"
-    description = "Replace iPad D2365 PMU with N69AP D2255 PMU"
-    requires = ["remove_ipad_drivers"]
-    old_bundle = "com.apple.driver.AppleD2365PMU"
-    new_bundle = "com.apple.driver.AppleD2255PMU"
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        se_donor = Path("artifacts/n69ap-15.8.8/KernelCache.raw")
-        if se_donor.exists():
-            self.donor_kc = se_donor
-        return super().apply(ctx)
+        raise RuntimeError(
+            "audio_cs35l19 is withheld; no personality for a missing amplifier is installed"
+        )
+
+
+class ChargerC26Patch(KernelPatch):
+    name = "charger_c26"
+    description = "AppleC26Charger needs a footprint larger than AppleHDQGasGaugeControl"
+    requires = []
+
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
+
+    def apply(self, ctx: PatchContext) -> Path:
+        raise RuntimeError(
+            "charger_c26: AppleHDQGasGaugeControl is too small (Image does not fit __TEXT); "
+            "C26 is not truncated and is not on the boot path"
+        )
 
 
 class WifiBcmPatch(KernelPatch):
-    """Patch AppleBCMWLANCore hash store for SE BCM43xx Wi-Fi chip."""
-
     name = "wifi_bcm"
-    description = "Patch Wi-Fi firmware hash check for SE BCM chip"
-    requires = ["remove_ipad_drivers"]
+    description = "Rewrite hash-store records to the stock SE firmware hashes"
+    requires = []
 
-    def __init__(self, donor_kc: Optional[Path] = None):
+    def __init__(self, donor_kc: Path | None = None):
         self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        print(f"  [{self.name}] Patching Wi-Fi firmware hash store validation...")
-        data = bytearray(ctx.kernel_path.read_bytes())
-        ctx.work_dir.mkdir(parents=True, exist_ok=True)
-
-        # Wi-Fi firmware hash validation bypass pattern for AppleBCMWLANCore
-        # Replaces exact hash comparison return value with success (1)
-        pattern = b"\x00\x00\x80\x52\xc0\x03\x5f\xd6"  # mov w0, #0 ; ret
-        replacement = b"\x20\x00\x80\x52\xc0\x03\x5f\xd6"  # mov w0, #1 ; ret
-
-        idx = data.find(pattern)
-        if idx != -1 and data.find(pattern, idx + 1) == -1:
-            data[idx:idx+len(replacement)] = replacement
-            print(f"    Patched Wi-Fi hash check at offset 0x{idx:x}")
-            out_path = ctx.work_dir / "kernel_wifi_patched.raw"
-            out_path.write_bytes(data)
-            return out_path
-        elif idx == -1:
-            raise RuntimeError("wifi_bcm: expected hash check pattern was not found")
-        else:
-            raise RuntimeError("wifi_bcm: hash check pattern is ambiguous; refusing a blind patch")
+        from .wifi_hash import WifiHashError, apply_wifi
+        directory = Path(ctx.config.get("wifi_firmware", "artifacts/n69-wifi"))
+        try:
+            return apply_wifi(ctx, directory)
+        except WifiHashError as error:
+            raise RuntimeError(f"wifi_bcm: {error}") from error
 
 
-class ChargerC26Patch(TransplantedDriverPatch):
-    """Port C26 charger driver from SE iOS 15 kernel into iPad5 iOS 16 kernel.
+class VibrationDrv2604Patch(KernelPatch):
+    name = "vibration_drv2604"
+    description = "DRV2604 stays disabled unless the iPad class is the same driver"
+    requires = []
 
-    Uses footprint-displacement engine to transplant com.apple.driver.AppleC26Charger.
-    The C26 charger is 10769 bytes in SE 15.8.8 kernel.
-    """
-    name = "charger_c26"
-    description = "Add N69AP C26 charger driver (transplant from SE 15.8.8)"
-    requires = ["remove_ipad_drivers"]
-    old_bundle = "com.apple.driver.AppleHDQGasGaugeControl"  # 8708 bytes footprint
-    new_bundle = "com.apple.driver.AppleC26Charger"
+    def __init__(self, donor_kc: Path | None = None):
+        self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        se_donor = Path("artifacts/n69ap-15.8.8/KernelCache.raw")
-        if se_donor.exists():
-            self.donor_kc = se_donor
-        return super().apply(ctx)
+        raise RuntimeError(
+            "vibration_drv2604 is disabled; the iPad kernel has no matching DRV2604 "
+            "class to edit, and no personality is left probing a missing driver"
+        )

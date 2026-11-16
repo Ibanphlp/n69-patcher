@@ -105,8 +105,8 @@ stage_cryptex() {
         ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
         die "Cryptex 流式写入失败"
     rsh "/usr/sbin/chown -R -h root:wheel /mnt6/System /mnt6/usr; sync"
-    rsh "test -e /mnt6/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64 || ls /mnt6/System/Library/dyld/ 2>/dev/null | head -3" >/dev/null 2>&1 ||
-        warn "没找到 dyld_shared_cache（Cryptex 内容布局和预期不同，请 ls /mnt6/System/Library/Caches 与 /mnt6/System/Library/dyld 确认）"
+    rsh "test -e /mnt6/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64" ||
+        die "Cryptex 写入后缺少 /mnt6/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64（20H392 的 SystemOS 成员是 ${T_CRYPTEX_ENTRY_J96:-087-86624-047.dmg}）。没有 dyld shared cache 时 launchd 起不来。"
     ok "Cryptex 已写入 SystemB。"
     stage_preboot
 }
