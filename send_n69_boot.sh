@@ -6,8 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-python3 - << 'PY'
+mark_trustcache() {
+    python3 - << 'PY'
 import json
+import os
 from pathlib import Path
 import sys
 sys.path.insert(0, ".")
@@ -17,9 +19,28 @@ cache = Path("artifacts/boot/boot_TC.img4")
 if not manifest_path.is_file() or not cache.is_file() or cache.stat().st_size == 0:
     raise SystemExit("Missing artifacts/boot/boot.json or boot_TC.img4. Build the boot images first.")
 manifest = json.loads(manifest_path.read_text())
-manifest_path.write_text(json.dumps(mark_shared_data(manifest), indent=2) + "\n")
-print("Trust cache marked for the shared-data install. No Mach-O was replaced.")
+text = json.dumps(mark_shared_data(manifest), indent=2) + "\n"
+try:
+    manifest_path.write_text(text)
+except PermissionError:
+    # A previous sudo build left this file owned by root.
+    print("NEED_ROOT")
+    Path("/tmp/n69-boot.json").write_text(text)
+else:
+    print("Trust cache marked for the shared-data install. No Mach-O was replaced.")
 PY
+}
+
+result="$(mark_trustcache)"
+if [[ "$result" == *NEED_ROOT* ]]; then
+    echo "artifacts/boot/boot.json is owned by root. Updating it with sudo."
+    sudo cp /tmp/n69-boot.json artifacts/boot/boot.json
+    sudo chown "$(id -un)" artifacts/boot/boot.json
+    rm -f /tmp/n69-boot.json
+    echo "Trust cache marked for the shared-data install. No Mach-O was replaced."
+else
+    printf '%s\n' "$result"
+fi
 
 if [[ -x ramdisk-main/Darwin/irecovery ]]; then
     IRECOVERY="ramdisk-main/Darwin/irecovery"
