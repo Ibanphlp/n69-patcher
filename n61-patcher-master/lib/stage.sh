@@ -556,21 +556,19 @@ stage_finish() {
             log "keybags → DataB…"
             ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt7" <"$keybags" ||
                 die "keybags 写入失败"
-        elif stock_data="$(resolve_stock_data_slot)"; then
-            # The stock systembag is wrapped by this device's effaceable key, so
-            # copying it read-only from the stock Data volume needs no ramdisk SEP.
-            # resolve_stock_data_slot uses APFS role 0x40 when s2 is not Data.
-            log "Copying stock keybags from disk0s1s${stock_data} → DataB…"
-            rsh "/sbin/mount | /usr/bin/grep -q ' on /mnt2 ' && ! /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' && exit 1;
-                /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' || /sbin/mount_apfs -o ro /dev/disk0s1s${stock_data} /mnt2" ||
-                die "Cannot mount the stock Data volume read-only at /mnt2"
-            rsh "test -s /mnt2/keybags/systembag.kb" ||
-                { umount_vols /mnt2; die "Stock systembag not found at /mnt2/keybags/systembag.kb"; }
-            rsh "mkdir -p /mnt7/keybags && /bin/cp -a /mnt2/keybags/. /mnt7/keybags/ && test -s /mnt7/keybags/systembag.kb" ||
-                { umount_vols /mnt2; die "Stock keybag copy failed"; }
-            umount_vols /mnt2
+        elif sep_ping_ok; then
+            # disk0s1s2 is the encrypted iOS 15 Data volume. mount_apfs waits
+            # forever for its key from this ramdisk, with or without the SEP
+            # image iBoot already loaded. Do not mount it. Create a systembag
+            # on DataB instead. ensure_sep pings the running SEP and refuses
+            # seputil --load on A9.
+            log "Not mounting the encrypted iOS 15 Data volume; that mount does not return."
+            log "Creating a systembag with the SEP already loaded by iBoot…"
+            ensure_systembag
         else
-            die "缺少 ${keybags}（--data-protection none 时需自备越狱 iOS12 的 keybags）"
+            die "SEP is not answering, so a systembag cannot be created. Do not run seputil --load on A9.
+  Reboot the ramdisk with N61_RAMDISK_SEP=1, then rerun patch-rootfs. set_roles has not run.
+  Or place a device keybags.tar at ${keybags}."
         fi
     fi
 
