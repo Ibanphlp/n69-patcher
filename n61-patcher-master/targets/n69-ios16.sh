@@ -24,16 +24,15 @@ T_AMP="CS35L19"
 # 第二系统根分区：s8 (disk0s1s8)——s4=Update/s5=xART/s6=Preboot/s7=Hardware 已被占用
 T_ROOT_PART=8
 
-# 卷布局：在空闲槽位建 s8=SystemB / s9=DataB（role 0），最后改 role
+# s8 is the iOS 16 system volume. s9 may already exist from the earlier
+# two-volume attempt; it is not the Data volume iOS 16 boots.
+# SevenUP keeps the stock Data role (0x40) on the existing volume and selects
+# the new system with rd=. Role 0x4 is Recovery, which is what SevenUP assigns
+# the new volume. Do not move the iOS 15 System or Data roles.
 T_VOL_CREATE="SystemB DataB"
-T_ROLES="8:0x1 9:0x40"  # s8=SystemB(System), s9=DataB(Data); s4=Update, s5=xART, s6=Preboot, s7=Hardware 勿动
-
-# Like SevenUP, never require SEP inside the A9 ramdisk. Encrypted DataB needs
-# a live ramdisk SEP plus an iOS 12 MobileKeyBag patch; the stock keybags are
-# reused instead, and the boot-time SEP handles protection after boot.
+T_ROLES="8:0x4"
 T_DATA_PROTECTION="none"
 T_MNT_DATA_STOCK=2
-# iOS15 的 SystemA/DataA 占着 System(0x1)/Data(0x40) role；iOS16 按 role 找 Data 卷，需降级旧持有者
 T_ROLES_DEMOTE_OLD=1
 T_MNT_SYSTEM_B=8
 T_MNT_DATA_B=9

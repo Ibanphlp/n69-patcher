@@ -488,7 +488,36 @@ resolve_stock_data_slot() {
 }
 
 # ---------- finish（rootfs.finish）----------
+# SevenUP: the new system is selected with rd=, and the phone's existing Data
+# volume keeps its systembag. No ramdisk SEP, no new systembag, no role move
+# of the iOS 15 System or Data volumes.
+stage_finish_shared_data() {
+    log "SevenUP layout: rd=disk0s1s${T_ROOT_PART} uses the existing Data volume and its systembag."
+    guard_target_volumes system
+    mount_vol "$T_MNT_SYSTEM_B" /mnt6
+    mount_vol "$T_MNT_SYSTEM12" /mnt1 ro
+    log "xarts / preboot 目录…"
+    rsh "mkdir -p /mnt6/private/xarts /mnt6/private/preboot && chmod 755 /mnt6/private/xarts /mnt6/private/preboot"
+    log "SEP firmware onto SystemB (file copy only; the ramdisk SEP is not started)…"
+    rsh "mkdir -p /mnt6/usr/standalone/firmware"
+    if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
+        preboot_mount
+        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
+            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+    else
+        rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
+    fi
+    log "$(rsh "ls -ln /mnt6/usr/standalone/firmware/sep-firmware.img4")"
+    sync_dev
+    umount_vols /mnt1 /mnt6
+    log "finish 完成。iOS 15 的 System 和 Data role 没有改动。"
+}
+
 stage_finish() {
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        stage_finish_shared_data
+        return
+    fi
     local apfs14 encrypted=0 keybags
     if [ -n "${T_DONOR_APFS14:-}" ]; then
         apfs14="$(donor_dir)/$T_DONOR_APFS14"
@@ -580,6 +609,9 @@ stage_finish() {
 
 # ---------- set_roles（rootfs.set_roles，必须最后一步、卷未挂载）----------
 stage_set_roles() {
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        log "s${T_MNT_SYSTEM_B} → Recovery (0x4), same as SevenUP. The iOS 15 System and Data roles stay."
+    fi
     apfs_set_roles "$T_ROLES" 1
 }
 
