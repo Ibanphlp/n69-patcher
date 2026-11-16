@@ -204,7 +204,7 @@ N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
 echo ""
 echo -e "${CYAN}━━━ Flashing Volumes ━━━${NC}"
 
-./n61.sh volumes --target n69-ios16 -y
+./n61.sh volumes --target n69-ios16 --data-protection none -y
 echo "✓ APFS volumes created"
 
 # Stream rootfs
