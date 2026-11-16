@@ -65,6 +65,12 @@ for entry in "${components[@]}"; do
     IFS=':' read -r img name cmd <<< "$entry"
     [[ -s "artifacts/boot/${img}.img4" ]] || { echo "Missing artifacts/boot/${img}.img4" >&2; exit 1; }
 done
+# SevenUP refuses a full-iOS iBEC that does not name its root volume.
+# A9 uses disk0, not the A10 disk1 path.
+grep -a -q 'rd=disk0s1s8' artifacts/boot/boot_iBEC.img4 || {
+    echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
+    exit 1
+}
 
 echo "The phone must be in DFU. From the ramdisk: hold Power and Home, release Power after about 8 seconds, keep holding Home until the screen stays black."
 read -r -p "Press Enter when the screen is black in DFU. "
@@ -90,8 +96,9 @@ for entry in "${components[@]}"; do
     elif [[ -n "$cmd" ]]; then
         "$IRECOVERY" -c "$cmd"
     fi
+    # SevenUP waits 2s after iBSS and after iBEC. A9 does not receive go.
     if [[ "$name" == "iBSS" || "$name" == "iBEC" ]]; then
-        sleep 3
+        sleep 2
     else
         sleep 1
     fi

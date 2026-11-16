@@ -611,6 +611,8 @@ stage_finish() {
 stage_set_roles() {
     if [ "${T_NAME:-}" = "n69-ios16" ]; then
         log "s${T_MNT_SYSTEM_B} → Recovery (0x4), same as SevenUP. The iOS 15 System and Data roles stay."
+        # The previous raw write failed while Preboot was still mounted.
+        rsh 'for m in /mnt1 /mnt2 /mnt6 /mnt7 /mnt8 /mnt9; do /sbin/umount "$m" 2>/dev/null || true; done; sync'
     fi
     apfs_set_roles "$T_ROLES" 1
 }

@@ -65,8 +65,18 @@ apfs_read_block_fresh() {
 }
 
 apfs_write_block() {   # n file
-    ssh_run "dd of=$APFS_RDEV bs=$APFS_BS seek=$1 count=1 conv=notrunc 2>/dev/null && sync" \
-        <"$2" >/dev/null || die "块 $1 写入失败"
+    local n="$1" file="$2" dev out rc
+    # A mounted container volume makes the raw write fail and used to hide
+    # dd's error. Try the raw node, then the block node, and keep the text.
+    for dev in "$APFS_RDEV" /dev/disk0s1; do
+        rc=0
+        out="$(ssh_run "dd of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync" <"$file")" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            return 0
+        fi
+        warn "块 $n 写入 $dev 失败: ${out:-ssh rc $rc}"
+    done
+    die "块 $n 写入失败: ${out:-ssh rc $rc}"
 }
 
 # ---------- 字段读取 ----------
