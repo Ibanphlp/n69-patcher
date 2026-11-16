@@ -290,6 +290,13 @@ def apply_patches(kernel_path, patch_names, work_dir, im4m=None, config=None, do
                "audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm",
                "vibration_drv2604", "watchtower", "complzss_repack"]
     ordered = [name for name in ordered if name in patch_names]
+    # A required driver that is absent from the output is not a boot kernel.
+    required_markers = {
+        "pmu_d2255": b"com.apple.driver.AppleD2255PMU",
+        "chestnut": b"com.apple.driver.AppleChestnutDisplayPMU",
+        "display_pinot": b"com.apple.driver.ApplePinotLCD",
+        "touch_spin69": b"com.apple.driver.AppleMultitouchSPI",
+    }
     ctx = PatchContext(kernel_path, work_dir, im4m, config or {}, donor_kc=se_kernel)
     work_dir.mkdir(parents=True, exist_ok=True)
     if se_kernel and Path(se_kernel).is_file() and Path(se_kernel) != Path(kernel_path):
@@ -307,6 +314,9 @@ def apply_patches(kernel_path, patch_names, work_dir, im4m=None, config=None, do
             raise RuntimeError(f"{name} did not write a kernel")
         if name not in {"watchtower", "complzss_repack"} and Path(produced).read_bytes() == Path(current).read_bytes():
             raise RuntimeError(f"{name} left the kernel byte-identical")
+        marker = required_markers.get(name)
+        if marker is not None and marker not in Path(produced).read_bytes():
+            raise RuntimeError(f"{name} finished without {marker.decode()} in the kernel")
         current = produced
         ctx.kernel_path = current
         ctx.applied_patches.append(name)
