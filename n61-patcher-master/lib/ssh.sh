@@ -306,7 +306,7 @@ sep_ping_ok() {
     return 0
 }
 
-# A9/A9X: an in-ramdisk SEP load has been reported to cause a kernel panic.
+# A9/A9X：在 ramdisk 里 seputil --load 会让 AP 卡死（黑屏、背光亮、USB 消失；SSHRD_Script #319）
 device_is_a9() {
     local m
     m="$(ssh_run_timeout 10 "uname -m" 2>/dev/null | tr -d '\r\n ' || true)"
@@ -317,19 +317,18 @@ device_is_a9() {
     return 1
 }
 
-# SEP is required for protected APFS volumes and systembags. Prefer the
-# boot-time image, and attempt the N69 ramdisk fallback only after ping fails.
+# SEP：加密建卷与 systembag 依赖它（需已只读挂载 /mnt1）。
+# 优先使用 ramdisk 启动时由 iBoot（rsepfirmware）加载的 SEP；
+# 只有非 A9 设备才退回到 ramdisk 内 seputil --load。
 ensure_sep() {
     local fw="/usr/standalone/firmware/sep-firmware.img4" path="" hash=""
     local marker="${WK:-/nonexistent}/.ramdisk-sep-sent" attempt
-    local active candidates captured remote_digest local_digest
-    local hash_code='import hashlib, sys; h = hashlib.sha256(); f = open(sys.argv[1], "rb") if len(sys.argv) > 1 else sys.stdin.buffer; [h.update(b) for b in iter(lambda: f.read(1048576), b"")]; print(h.hexdigest())'
-    local -a select_args
     if sep_ping_ok; then
         return 0
     fi
 
     if [ -f "$marker" ]; then
+        # SEP 已由 iBoot 交给内核，可能仍在启动：只重试 ping，绝不再 seputil --load
         log "ramdisk 带 SEP 启动，等待 SEP 就绪…"
         for attempt in 1 2 3 4 5 6; do
             sleep 2
@@ -338,32 +337,26 @@ ensure_sep() {
                 return 0
             fi
         done
-        if [ "${T_NAME:-}" != "n69-ios16" ]; then
-            die "SEP image was sent before ramdisk boot, but seputil --ping still fails. Stopping before continuing."
-        fi
-        warn "Boot-time SEP did not respond. Trying the experimental ramdisk load; an A9 kernel panic has been reported (SSHRD_Script #319)."
+        die "SEP image was sent before ramdisk boot ($(cat "$marker" 2>/dev/null)), but seputil --ping still fails.
+  A successful transfer or matching device identity does not prove SEP accepted or started the image.
+  The cause is unknown; inspect the SEP transfer output, ramdisk configuration, and firmware compatibility.
+  Do not use seputil --load on A9 or bypass this check. Stopping before continuing."
     fi
 
-    if [ "${T_NAME:-}" != "n69-ios16" ] && device_is_a9 && [ "${N61_FORCE_SEPUTIL_LOAD:-0}" != "1" ]; then
-        die "A9 ramdisk SEP loading can cause a kernel panic; use the boot-time SEP path or explicitly set N61_FORCE_SEPUTIL_LOAD=1."
+    if device_is_a9 && [ "${N61_FORCE_SEPUTIL_LOAD:-0}" != "1" ]; then
+        die "A9 设备不能在 ramdisk 里用 seputil --load 加载 SEP：内核会卡死
+  （黑屏、背光亮、Finder 看不到设备；SSHRD_Script #319）。已中止，APFS 卷未被改动。
+  正确做法：让 iBoot 在 ramdisk 启动时加载 SEP（rsepfirmware）：
+    1) 强制重启进 DFU：按住 电源+Home 约 8s，松开电源、继续按 Home 约 10s。
+    2) ./n61.sh ramdisk --target ${T_NAME:-n69-ios16}
+       （有 state/IM4M.bin 时会自动构建并发送 ramdisk_SEP.img4，
+        日志里应出现「发送 SEP（iBoot rsepfirmware）」。）
+    3) 再重跑本步骤。"
     fi
 
     log "加载原生 SEP 固件…"
-    if [ "${T_NAME:-}" = "n69-ios16" ]; then
-        # Never choose an arbitrary Preboot slot or load a different image from
-        # the captured device-specific SEP used by the boot chain.
-        preboot_mount
-        active="$(ssh_run_timeout 30 "if [ -f ${PREBOOT_MNT:-/mnt8}/active ]; then /bin/cat ${PREBOOT_MNT:-/mnt8}/active; fi")" || die "Cannot read Preboot active slot."
-        candidates="$(ssh_run_timeout 90 "/usr/bin/find ${PREBOOT_MNT:-/mnt8} -name sep-firmware.img4 -type f")" || die "Cannot enumerate Preboot SEP images."
-        select_args=(select --mount "${PREBOOT_MNT:-/mnt8}" --active "$active" --stdin)
-        [ -z "${N69_PREBOOT_HASH:-}" ] || select_args+=(--requested "$N69_PREBOOT_HASH")
-        path="$(printf '%s\n' "$candidates" | python3 "$REPO/../tools/sep_image.py" "${select_args[@]}")" || die "Cannot select a unique Preboot SEP image; stopping before loading or formatting."
-        captured="$REPO/../state/sep-firmware.img4"
-        [ -s "$captured" ] || die "Captured SEP is missing; stopping before loading or formatting."
-        local_digest="$(python3 -c "$hash_code" "$captured")" || die "Cannot hash captured SEP."
-        remote_digest="$(set -o pipefail; ssh_run_timeout 90 "/bin/cat '$path'" | python3 -c "$hash_code")" || die "Cannot verify the Preboot SEP image."
-        [ "$local_digest" = "$remote_digest" ] || die "Preboot SEP differs from the captured image; stopping before loading or formatting."
-    elif ssh_run "test -f \"/mnt1${fw}\"" >/dev/null 2>&1; then
+    # 旧系统：固件在 s1；iOS15：在 Preboot 的 <active-hash>/usr/standalone/firmware 下
+    if ssh_run "test -f \"/mnt1${fw}\"" >/dev/null 2>&1; then
         path="/mnt1${fw}"
     else
         preboot_mount
@@ -377,9 +370,16 @@ ensure_sep() {
     fi
     log "SEP 固件: $path"
 
-    SSH_LOST_HINT="  SSH disconnected during or after SEP load. A kernel panic is possible, but the cause is unknown.
-        Firmware: ${path}
-        Protected volume creation has not started in this step. Reboot to DFU and inspect the logs before retrying."
+    # 从这里起若 ramdisk 掉线，几乎可以确定是 SEP 启动导致内核 panic；
+    # 此时 newfs_apfs 还没执行，APFS 容器未被改动。
+    SSH_LOST_HINT="  原因：SEP 固件刚加载完 ramdisk 就掉线 —— sepOS 启动触发了内核 panic，设备自动重启。
+        已加载的固件: ${path}
+        newfs_apfs 尚未执行，APFS 卷未被改动。
+  常见原因与处理：
+    1) ramdisk 的 iOS 版本必须与该 SEP 固件（本机已装系统，通常 15.8.8）一致；
+       检查 ${T_RAMDISK_DIR:-T_RAMDISK_DIR} 里的 ramdisk 是否用同一版本生成（如 sshrd.sh 15.8.8）。
+    2) 不需要加密 DataB 时改用 --data-protection none（volumes 将不再加载 SEP；
+       patch-rootfs 的 finish 步骤需要 state/keybags.tar）。"
 
     local load_out load_rc
     load_rc=0
