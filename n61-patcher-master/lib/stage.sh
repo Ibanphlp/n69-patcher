@@ -307,7 +307,10 @@ stage_rootfs() {
     rsh 'test "$(/sbin/mount | /usr/bin/grep -c "/dev/disk0s1s'"$T_MNT_SYSTEM_B"' on /mnt6")" -eq 1 && /bin/rm -rf /mnt6/.[!.]* /mnt6/*'
 
     log "流式写入 rootfs（约 25 分钟）…"
-    /usr/bin/tar -cpf - -C "$mnt" . | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
+    # --no-fflags: the ramdisk tar prints one "SCHILY.fflags" line per file and
+    # looks stuck. File flags are not needed on the device.
+    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags -cpf - -C "$mnt" . |
+        ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
         die "rootfs 流式写入失败"
 
     ssh_ensure
@@ -518,7 +521,7 @@ stage_finish() {
         rsh "cd /mnt6 && { [ -e sbin/fsckBackup ] || mv sbin/fsck sbin/fsckBackup; } &&
             { [ -e System/Library/Filesystems/apfs.fsBackup ] ||
               mv System/Library/Filesystems/apfs.fs System/Library/Filesystems/apfs.fsBackup; }"
-        COPYFILE_DISABLE=1 /usr/bin/tar --uid 0 --gid 0 --no-xattrs -cf - \
+        COPYFILE_DISABLE=1 /usr/bin/tar --uid 0 --gid 0 --no-xattrs --no-fflags -cf - \
             -C "$apfs14" ./sbin/fsck ./System/Library/Filesystems/apfs.fs |
             ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6 &&
                 chmod 755 /mnt6/System/Library/Filesystems/apfs.fs" ||

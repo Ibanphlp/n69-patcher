@@ -101,7 +101,7 @@ stage_cryptex() {
         done' || die "Cryptex 目录预检失败"
 
     log "流式写入 Cryptex（${roots# }）到 /mnt6 …"
-    COPYFILE_DISABLE=1 /usr/bin/tar -cpf - -C "$cmnt" $roots |
+    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags -cpf - -C "$cmnt" $roots |
         ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
         die "Cryptex 流式写入失败"
     rsh "/usr/sbin/chown -R -h root:wheel /mnt6/System /mnt6/usr; sync"

@@ -417,7 +417,7 @@ deploy_path() {
     src="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
     if [ -d "$src" ]; then
         rsh "mkdir -p \"$dest\""
-        COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs ${uid:+--uid "$uid"} ${gid:+--gid "$gid"} \
+        COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags ${uid:+--uid "$uid"} ${gid:+--gid "$gid"} \
             -cpf - -C "$src" . \
             | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C \"$dest\"" || rc=$?
         [ "$rc" -eq 0 ] || die "部署目录失败（tar 退出码 ${rc}）: $src → $dest"
@@ -441,7 +441,7 @@ deploy_relative_paths() {   # root dest listfile
     [ -s "$list" ] || { log "  （清单为空，跳过）"; return 0; }
     root="$(cd "$root" && pwd)"
     rsh "mkdir -p \"$dest\""
-    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs -cpf - -C "$root" -T "$list" \
+    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags -cpf - -C "$root" -T "$list" \
         | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C \"$dest\"" ||
         die "文件集流式写入失败: $(wc -l <"$list" | tr -d ' ') 项 → $dest"
 }
