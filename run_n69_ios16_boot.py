@@ -11,6 +11,7 @@ Boot sequence:
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -323,6 +324,11 @@ def send_boot_chain(config: BootConfig) -> bool:
         validate_boot_images((image, name) for image, name, _command in boot_chain)
     except BuildError as error:
         UI.error(str(error))
+        return False
+    manifest = json.loads(Path("artifacts/boot/boot.json").read_text())
+    from src.ios16se.trustcache import boot_trustcache_allowed
+    if not boot_trustcache_allowed(manifest):
+        UI.error("Refusing to send the unmarked stock trust cache. Run ./send_n69_boot.sh")
         return False
 
     if not irecovery.exists():

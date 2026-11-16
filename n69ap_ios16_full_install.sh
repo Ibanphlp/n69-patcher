@@ -272,13 +272,15 @@ fi
 
 python3 - << 'PY'
 import json
+import sys
 from pathlib import Path
+sys.path.insert(0, ".")
+from src.ios16se.trustcache import boot_trustcache_allowed
 manifest = json.loads(Path("artifacts/boot/boot.json").read_text())
-if manifest.get("trustcache_is_stock", True):
+if not boot_trustcache_allowed(manifest):
     raise SystemExit(
-        "Refusing to send artifacts/boot/boot_TC.img4: it is still the stock iPad "
-        "trust cache from before patch-rootfs and the cryptex. Rebuild it from the "
-        "binaries that were actually written, then clear trustcache_is_stock."
+        "Refusing to send artifacts/boot/boot_TC.img4: it is still the unmarked "
+        "stock iPad trust cache. Run ./send_n69_boot.sh after patch-rootfs."
     )
 PY
 
