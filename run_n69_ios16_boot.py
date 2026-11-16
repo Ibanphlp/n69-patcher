@@ -260,6 +260,10 @@ def build_boot_images(config: BootConfig) -> bool:
 
         # Load config
         build_config = load_config(profile_path)
+        # CPID 0x8003 is the TSMC SE even when irecovery prints MODEL n69ap.
+        # The display donor follows the chip: j71tap for n69uap, j71sap for n69ap.
+        if isinstance(getattr(build_config, "target", None), dict):
+            build_config.target["board_config"] = config.device_board
 
         # Override boot mode
         import os
@@ -406,6 +410,12 @@ def main():
         help="Build mode (default: full)"
     )
     parser.add_argument(
+        "--board",
+        choices=["n69ap", "n69uap"],
+        default="n69ap",
+        help="n69ap is CPID 0x8000 (Samsung). n69uap is CPID 0x8003 (TSMC)."
+    )
+    parser.add_argument(
         "--boot", "-b",
         action="store_true",
         help="Send boot chain to device after building"
@@ -421,6 +431,7 @@ def main():
     config = BootConfig(
         im4m_path=Path(args.im4m),
         boot_mode=args.mode,
+        device_board=args.board,
     )
 
     # Header
