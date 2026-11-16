@@ -509,7 +509,13 @@ stage_finish() {
         die "DataB 未挂载到 /mnt7，拒绝写入 private/var/keybags"
 
     log "private/var → DataB…"
-    rsh "/bin/cp -a /mnt6/private/var/. /mnt7/"
+    # A resumed finish already copied this tree. cp -a then dies on an existing
+    # symlink (timezone localtime) and never reaches the keybags.
+    rsh 'if [ -d /mnt7/mobile ] && [ -d /mnt7/root ]; then
+            echo "DataB already has private/var; keeping it"
+        else
+            /bin/cp -a /mnt6/private/var/. /mnt7/
+        fi'
     # 清掉旧的 SpringBoard 图标缓存（staged App 图标来自 UI donor）
     rsh "/bin/rm -rf /mnt7/mobile/Library/Caches/com.apple.IconsCache"
 
