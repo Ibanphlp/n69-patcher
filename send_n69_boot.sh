@@ -133,8 +133,16 @@ grep -a -q 'rd=disk0s1s8' "$BOOT_DIR/boot_iBEC.img4" || {
     echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
     exit 1
 }
-LOGO="ramdisk-main/sshramdisk/bootlogo.img4"
-[[ -s "$LOGO" ]] || { echo "Missing iBEC boot logo: $LOGO" >&2; exit 1; }
+LOGO_SOURCE="ramdisk-main/other/bootlogo.im4p"
+[[ -s "$LOGO_SOURCE" ]] || { echo "Missing iBEC boot logo source: $LOGO_SOURCE" >&2; exit 1; }
+LOGO_TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$LOGO_TMP_DIR"' EXIT
+LOGO="$LOGO_TMP_DIR/bootlogo.img4"
+if ! "$IMG4" -i "$LOGO_SOURCE" -A -T rlgo -M "$IM4M" -o "$LOGO"; then
+    echo "Could not sign the iBEC boot logo with $IM4M." >&2
+    exit 1
+fi
+preflight_img4 "$LOGO" BootLogo
 
 echo "The phone must be in DFU. From the ramdisk: hold Power and Home, release Power after about 8 seconds, keep holding Home until the screen stays black."
 read -r -p "Press Enter when the screen is black in DFU. "
