@@ -156,6 +156,10 @@ grep -a -q 'rd=disk0s1s8' "$BOOT_DIR/boot_iBEC.img4" || {
     echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
     exit 1
 }
+grep -a -F -q 'panic-wait-forever=1' "$BOOT_DIR/boot_iBEC.img4" || {
+    echo "boot_iBEC.img4 lacks panic-wait-forever=1. Rebuild the full boot chain (not --kernel-only) before this diagnostic boot." >&2
+    exit 1
+}
 LOGO_SOURCE="ramdisk-main/other/bootlogo.im4p"
 [[ -s "$LOGO_SOURCE" ]] || { echo "Missing iBEC boot logo source: $LOGO_SOURCE" >&2; exit 1; }
 LOGO_TMP_DIR="$(mktemp -d)"

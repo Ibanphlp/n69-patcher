@@ -126,6 +126,7 @@ class GuideTests(unittest.TestCase):
         script = (ROOT / "send_n69_boot.sh").read_text()
         self.assertIn('run_irecovery "show iBEC boot logo" -c "setpicture 0x1"', script)
         self.assertIn("grep -a -q 'rd=disk0s1s8'", script)
+        self.assertIn('grep -a -F -q \'panic-wait-forever=1\' "$BOOT_DIR/boot_iBEC.img4"', script)
         self.assertIn("preflight_img4 \"$BOOT_DIR/boot_KC.img4\" KernelCache", script)
         self.assertIn('IMG4 preflight failed for $label', script)
 
