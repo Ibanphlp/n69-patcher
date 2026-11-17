@@ -95,9 +95,10 @@ __attribute__((noinline)) void pd_render(void) {
     if (s->magic != PD_MAGIC) return;
     if (s->render_count >= 4) return;
     struct pe_video *v = pd_vinfo();
+    if (!v) return;
     u64 base = v->base;
     u64 width = v->width, height = v->height, stride = v->stride, depth = v->depth;
-    if ((base >> 48) != 0xffff || (base & 3) || width < 80 || width > 2048 ||
+    if (!base || !width || !height || !stride || (base >> 48) != 0xffff || (base & 3) || width < 80 || width > 2048 ||
         height < 80 || height > 2048 || stride < width * 4 || stride > 16384 || (stride & 3) ||
         (depth != 32 && depth != 0)) return;
     struct canvas c = {(volatile u32 *)base, (u32)width, (u32)height, (u32)(stride / 4),
@@ -134,6 +135,7 @@ __attribute__((noinline)) void pd_capture(u64 options, u64 caller, const char *f
     s->busy = 1;
     s->magic = PD_MAGIC;
     s->stage = 1;
+    s->reserved = 0x4e363901U; /* N69 panic marker: entry reached, framebuffer may be unavailable. */
     s->slide = pd_slide();
     s->caller = caller;
     s->options = options;
@@ -142,6 +144,7 @@ __attribute__((noinline)) void pd_capture(u64 options, u64 caller, const char *f
     if (fmt) for (u32 i = 0; i + 1 < MESSAGE_CAP && fmt[i]; ++i) capture_character((u8)fmt[i]);
     pd_render();
     s->stage = 2;
+    s->reserved = 0x4e363902U; /* Panic formatter reached. */
     if (fmt && args) {
         u64 copy = *args;
         s->length = 0;
@@ -157,5 +160,7 @@ __attribute__((noinline)) void pd_capture(u64 options, u64 caller, const char *f
         fp = next;
     }
     s->stage = 3;
+    s->reserved = 0x4e363903U; /* Stack capture reached. Read in RAM/UART diagnostics. */
+    __asm__ volatile("dsb sy" ::: "memory");
     pd_render();
 }
