@@ -73,17 +73,19 @@ apfs_read_block_fresh() {
 }
 
 apfs_write_block() {   # n file
-    local n="$1" file="$2" dev out rc b64 size
+    local n="$1" file="$2" dev out rc payload size
     # sshpass reads stdin while it watches for a password prompt, so a raw
-    # 4K image piped into `dd` never reaches the disk. The same block reads
-    # back because reads do not use stdin. Send the block as base64 instead.
+    # 4K image piped into `dd` never reaches the disk. The ramdisk has no
+    # /usr/bin/base64. Send octal escapes and let the remote shell printf
+    # rebuild the block, then refuse to touch the disk unless it is 4096 bytes.
     size="$(wc -c <"$file" | tr -d ' ')"
     [ "$size" -eq "$APFS_BS" ] || die "块 $n 本地镜像不是 ${APFS_BS} 字节（实际 $size）"
-    b64="$(base64 <"$file" | tr -d '\n')"
+    payload="$(od -An -v -tu1 "$file" | awk '{ for (i = 1; i <= NF; i++) printf "\\%03o", $i }')"
+    [ "${#payload}" -eq $(( APFS_BS * 4 )) ] || die "块 $n 本地编码不完整"
     for dev in "$APFS_RDEV" /dev/disk0s1; do
         rc=0
-        out="$(ssh_run "printf '%s' '$b64' | /usr/bin/base64 -D | /bin/dd of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && /bin/sync")" || rc=$?
-        if [ "$rc" -eq 0 ]; then
+        out="$(ssh_run "printf '$payload' > /tmp/n69-block && test \"\$(wc -c < /tmp/n69-block | tr -d ' ')\" = $APFS_BS && /bin/dd if=/tmp/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && /bin/sync && rm -f /tmp/n69-block")" || rc=$?
+        if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '1+0 records in'; then
             return 0
         fi
         warn "块 $n 写入 $dev 失败: ${out:-ssh rc $rc}"
@@ -548,7 +550,11 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
         apfs_write_block "$paddr" "$tmp"
         readback="$(apfs_read_block_fresh "$paddr")" || die "s$idx: 读回失败"
         if ! cmp -s "$tmp" "$readback"; then
-            die "s$idx: 读回不一致！用备份恢复: $bak"
+            warn "s$idx: 读回不一致，写回备份 $bak"
+            apfs_write_block "$paddr" "$bak"
+            readback="$(apfs_read_block_fresh "$paddr")" || die "s$idx: 备份读回失败"
+            cmp -s "$bak" "$readback" || die "s$idx: 备份写回失败: $bak"
+            die "s$idx: 角色没有写入。原块已从备份恢复: $bak"
         fi
         ok "  已写入并校验（备份: ${bak}）"
         rm -f "$tmp"
