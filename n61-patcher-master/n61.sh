@@ -175,6 +175,10 @@ fi
 
 if [ -n "$OPT_DATA_PROTECTION" ]; then
     T_DATA_PROTECTION="$OPT_DATA_PROTECTION"
+elif [ "${T_NAME:-}" = "n69-ios16" ]; then
+    # Unencrypted DataB is the N69 path. An omitted flag must not fall through
+    # to the encrypted default and then refuse the volume that already exists.
+    T_DATA_PROTECTION="none"
 elif [ -z "${T_DATA_PROTECTION+set}" ]; then
     T_DATA_PROTECTION="encrypted"
 fi

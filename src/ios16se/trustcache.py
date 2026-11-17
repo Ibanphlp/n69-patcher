@@ -10,6 +10,30 @@ class TrustCacheError(ValueError):
     """The trust cache does not describe the binaries that were installed."""
 
 
+# The N69 core install copies plists, an activation ticket and the SEP image.
+# It does not replace a Mach-O. The static iPad cache still describes the
+# streamed rootfs and cryptex, so the boot may send that cache under this review.
+REVIEW_SHARED_DATA = "shared-data-no-macho"
+
+
+def mark_shared_data(manifest: dict) -> dict:
+    """Record that this boot uses the stock cache because no Mach-O was replaced."""
+
+    updated = dict(manifest)
+    updated["trustcache_is_stock"] = False
+    updated["trustcache_review"] = REVIEW_SHARED_DATA
+    return updated
+
+
+def boot_trustcache_allowed(manifest: dict) -> bool:
+    """True only for the reviewed shared-data install, not for an unmarked stock cache."""
+
+    return (
+        manifest.get("trustcache_review") == REVIEW_SHARED_DATA
+        and manifest.get("trustcache_is_stock") is False
+    )
+
+
 def parse_v1(data: bytes) -> list[bytes]:
     if len(data) < 8:
         raise TrustCacheError("trust cache is truncated")

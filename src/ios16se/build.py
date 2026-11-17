@@ -766,7 +766,8 @@ def boot_flow(artifacts: BuildArtifacts, config: BuildConfig) -> int:
             f"artifact set is {manifest_model}, probe is {identity.model} ({identity.cpid_text})"
         )
     boot_manifest = json.loads(Path(config.output["boot_manifest"]).read_text())
-    if boot_manifest.get("trustcache_is_stock", True):
+    from .trustcache import boot_trustcache_allowed
+    if not boot_trustcache_allowed(boot_manifest):
         raise BuildError(
             "boot trust cache is still the stock iPad cache sealed before patch-rootfs; refusing to send it"
         )

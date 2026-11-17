@@ -11,7 +11,8 @@ SSH_PORT="${RAMDISK_PORT:-${T_RAMDISK_PORT:-2222}}"
 SSH_PW="${RAMDISK_PASSWORD:-${T_RAMDISK_PASSWORD:-alpine}}"
 # Isolate USB ramdisk connections from host aliases and keys.
 SSH_OPTIONS=(-F /dev/null
-    -o PreferredAuthentications=password,keyboard-interactive
+    -o PreferredAuthentications=password
+    -o KbdInteractiveAuthentication=no
     -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1)
 IPROXY_PID=""
 SSH_CONNECTED=0
@@ -232,30 +233,47 @@ ssh_ensure() {
 }
 
 # 远端命令，失败即中止；stdout 透传。secs>0 时超时返回 124。
+# 登录被拒或连接被掐断时先重启 iproxy 再试。密码是对的也会偶发
+# Permission denied，一次失败不能把已经跑起来的 patch-rootfs 杀掉。
 rsh_timeout() {   # secs cmd
-    local secs="$1" cmd="$2" out rc=0
-    out="$(ssh_run_timeout "$secs" "$cmd" 2>"$WORK/.ssh-err")" || rc=$?
-    if [ "$rc" -ne 0 ]; then
+    local secs="$1" cmd="$2" out rc=0 attempt=1 err
+    while [ "$attempt" -le 4 ]; do
+        rc=0
+        out="$(ssh_run_timeout "$secs" "$cmd" 2>"$WORK/.ssh-err")" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            printf '%s' "$out"
+            return 0
+        fi
+        err="$(cat "$WORK/.ssh-err" 2>/dev/null || true)"
         if [ "$rc" -eq 124 ]; then
             die "远端命令超时（${secs}s）: ${cmd}
-$(cat "$WORK/.ssh-err" 2>/dev/null)
+$err
   若这是 newfs_apfs，容器可能已被锁住：请重启设备进 DFU 后重试。"
-        fi
-        if [ "$rc" -eq 255 ] && grep -q "Permission denied" "$WORK/.ssh-err"; then
-            die "ramdisk SSH authentication failed on port ${SSH_PORT}.
-  Default password: alpine. Export RAMDISK_PASSWORD to use a different password.
-  Check that this port forwards to the intended ramdisk.
-$(cat "$WORK/.ssh-err")"
         fi
         if [ "$rc" -eq 255 ] && [[ "$cmd" == *newfs_apfs* ]]; then
             die "创建 APFS 卷时 SSH 连接中断：${cmd}
-$(cat "$WORK/.ssh-err" 2>/dev/null)
+$err
   设备或 ramdisk 可能已重启，DataB 状态未知。重新进入 DFU 并启动 ramdisk 后，先运行 ./n61.sh status --target n69-ios16 检查卷，再决定是否重试；不要直接重复格式化。"
         fi
+        if [ "$rc" -eq 255 ] && [ "$attempt" -lt 4 ] && ramdisk_fell_back; then
+            ssh_lost_die
+        fi
+        if [ "$rc" -eq 255 ] && [ "$attempt" -lt 4 ]; then
+            warn "SSH 登录或连接失败，重启隧道后重试 (${attempt}/3)…"
+            proxy_restart
+            ssh_ensure || true
+            attempt=$(( attempt + 1 ))
+            continue
+        fi
+        if [ "$rc" -eq 255 ] && printf '%s\n' "$err" | grep -q "Permission denied"; then
+            die "ramdisk SSH authentication failed on port ${SSH_PORT}.
+  Default password: alpine. Export RAMDISK_PASSWORD to use a different password.
+  Check that this port forwards to the intended ramdisk.
+$err"
+        fi
         die "远端命令失败($rc): $cmd
-$(cat "$WORK/.ssh-err" 2>/dev/null)"
-    fi
-    printf '%s' "$out"
+$err"
+    done
 }
 
 rsh() { rsh_timeout 0 "$1"; }
@@ -417,7 +435,7 @@ deploy_path() {
     src="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
     if [ -d "$src" ]; then
         rsh "mkdir -p \"$dest\""
-        COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs ${uid:+--uid "$uid"} ${gid:+--gid "$gid"} \
+        COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags ${uid:+--uid "$uid"} ${gid:+--gid "$gid"} \
             -cpf - -C "$src" . \
             | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C \"$dest\"" || rc=$?
         [ "$rc" -eq 0 ] || die "部署目录失败（tar 退出码 ${rc}）: $src → $dest"
@@ -441,7 +459,7 @@ deploy_relative_paths() {   # root dest listfile
     [ -s "$list" ] || { log "  （清单为空，跳过）"; return 0; }
     root="$(cd "$root" && pwd)"
     rsh "mkdir -p \"$dest\""
-    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs -cpf - -C "$root" -T "$list" \
+    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags -cpf - -C "$root" -T "$list" \
         | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C \"$dest\"" ||
         die "文件集流式写入失败: $(wc -l <"$list" | tr -d ' ') 项 → $dest"
 }

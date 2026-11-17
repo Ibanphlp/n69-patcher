@@ -307,7 +307,10 @@ stage_rootfs() {
     rsh 'test "$(/sbin/mount | /usr/bin/grep -c "/dev/disk0s1s'"$T_MNT_SYSTEM_B"' on /mnt6")" -eq 1 && /bin/rm -rf /mnt6/.[!.]* /mnt6/*'
 
     log "流式写入 rootfs（约 25 分钟）…"
-    /usr/bin/tar -cpf - -C "$mnt" . | ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
+    # --no-fflags: the ramdisk tar prints one "SCHILY.fflags" line per file and
+    # looks stuck. File flags are not needed on the device.
+    COPYFILE_DISABLE=1 /usr/bin/tar --no-xattrs --no-fflags -cpf - -C "$mnt" . |
+        ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6" ||
         die "rootfs 流式写入失败"
 
     ssh_ensure
@@ -485,7 +488,36 @@ resolve_stock_data_slot() {
 }
 
 # ---------- finish（rootfs.finish）----------
+# SevenUP: the new system is selected with rd=, and the phone's existing Data
+# volume keeps its systembag. No ramdisk SEP, no new systembag, no role move
+# of the iOS 15 System or Data volumes.
+stage_finish_shared_data() {
+    log "SevenUP layout: rd=disk0s1s${T_ROOT_PART} uses the existing Data volume and its systembag."
+    guard_target_volumes system
+    mount_vol "$T_MNT_SYSTEM_B" /mnt6
+    mount_vol "$T_MNT_SYSTEM12" /mnt1 ro
+    log "xarts / preboot 目录…"
+    rsh "mkdir -p /mnt6/private/xarts /mnt6/private/preboot && chmod 755 /mnt6/private/xarts /mnt6/private/preboot"
+    log "SEP firmware onto SystemB (file copy only; the ramdisk SEP is not started)…"
+    rsh "mkdir -p /mnt6/usr/standalone/firmware"
+    if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
+        preboot_mount
+        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
+            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+    else
+        rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
+    fi
+    log "$(rsh "ls -ln /mnt6/usr/standalone/firmware/sep-firmware.img4")"
+    sync_dev
+    umount_vols /mnt1 /mnt6
+    log "finish 完成。iOS 15 的 System 和 Data role 没有改动。"
+}
+
 stage_finish() {
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        stage_finish_shared_data
+        return
+    fi
     local apfs14 encrypted=0 keybags
     if [ -n "${T_DONOR_APFS14:-}" ]; then
         apfs14="$(donor_dir)/$T_DONOR_APFS14"
@@ -506,7 +538,13 @@ stage_finish() {
         die "DataB 未挂载到 /mnt7，拒绝写入 private/var/keybags"
 
     log "private/var → DataB…"
-    rsh "/bin/cp -a /mnt6/private/var/. /mnt7/"
+    # A resumed finish already copied this tree. cp -a then dies on an existing
+    # symlink (timezone localtime) and never reaches the keybags.
+    rsh 'if [ -d /mnt7/mobile ] && [ -d /mnt7/root ]; then
+            echo "DataB already has private/var; keeping it"
+        else
+            /bin/cp -a /mnt6/private/var/. /mnt7/
+        fi'
     # 清掉旧的 SpringBoard 图标缓存（staged App 图标来自 UI donor）
     rsh "/bin/rm -rf /mnt7/mobile/Library/Caches/com.apple.IconsCache"
 
@@ -518,7 +556,7 @@ stage_finish() {
         rsh "cd /mnt6 && { [ -e sbin/fsckBackup ] || mv sbin/fsck sbin/fsckBackup; } &&
             { [ -e System/Library/Filesystems/apfs.fsBackup ] ||
               mv System/Library/Filesystems/apfs.fs System/Library/Filesystems/apfs.fsBackup; }"
-        COPYFILE_DISABLE=1 /usr/bin/tar --uid 0 --gid 0 --no-xattrs -cf - \
+        COPYFILE_DISABLE=1 /usr/bin/tar --uid 0 --gid 0 --no-xattrs --no-fflags -cf - \
             -C "$apfs14" ./sbin/fsck ./System/Library/Filesystems/apfs.fs |
             ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt6 &&
                 chmod 755 /mnt6/System/Library/Filesystems/apfs.fs" ||
@@ -547,21 +585,19 @@ stage_finish() {
             log "keybags → DataB…"
             ssh_run "/usr/bin/tar --numeric-owner -xpf - -C /mnt7" <"$keybags" ||
                 die "keybags 写入失败"
-        elif stock_data="$(resolve_stock_data_slot)"; then
-            # The stock systembag is wrapped by this device's effaceable key, so
-            # copying it read-only from the stock Data volume needs no ramdisk SEP.
-            # resolve_stock_data_slot uses APFS role 0x40 when s2 is not Data.
-            log "Copying stock keybags from disk0s1s${stock_data} → DataB…"
-            rsh "/sbin/mount | /usr/bin/grep -q ' on /mnt2 ' && ! /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' && exit 1;
-                /sbin/mount | /usr/bin/grep -q 'disk0s1s${stock_data} on /mnt2 ' || /sbin/mount_apfs -o ro /dev/disk0s1s${stock_data} /mnt2" ||
-                die "Cannot mount the stock Data volume read-only at /mnt2"
-            rsh "test -s /mnt2/keybags/systembag.kb" ||
-                { umount_vols /mnt2; die "Stock systembag not found at /mnt2/keybags/systembag.kb"; }
-            rsh "mkdir -p /mnt7/keybags && /bin/cp -a /mnt2/keybags/. /mnt7/keybags/ && test -s /mnt7/keybags/systembag.kb" ||
-                { umount_vols /mnt2; die "Stock keybag copy failed"; }
-            umount_vols /mnt2
+        elif sep_ping_ok; then
+            # disk0s1s2 is the encrypted iOS 15 Data volume. mount_apfs waits
+            # forever for its key from this ramdisk, with or without the SEP
+            # image iBoot already loaded. Do not mount it. Create a systembag
+            # on DataB instead. ensure_sep pings the running SEP and refuses
+            # seputil --load on A9.
+            log "Not mounting the encrypted iOS 15 Data volume; that mount does not return."
+            log "Creating a systembag with the SEP already loaded by iBoot…"
+            ensure_systembag
         else
-            die "缺少 ${keybags}（--data-protection none 时需自备越狱 iOS12 的 keybags）"
+            die "SEP is not answering, so a systembag cannot be created. Do not run seputil --load on A9.
+  Reboot the ramdisk with N61_RAMDISK_SEP=1, then rerun patch-rootfs. set_roles has not run.
+  Or place a device keybags.tar at ${keybags}."
         fi
     fi
 
@@ -573,6 +609,11 @@ stage_finish() {
 
 # ---------- set_roles（rootfs.set_roles，必须最后一步、卷未挂载）----------
 stage_set_roles() {
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        log "s${T_MNT_SYSTEM_B} → Recovery (0x4), same as SevenUP. The iOS 15 System and Data roles stay."
+        # The previous raw write failed while Preboot was still mounted.
+        rsh 'for m in /mnt1 /mnt2 /mnt6 /mnt7 /mnt8 /mnt9; do /sbin/umount "$m" 2>/dev/null || true; done; sync'
+    fi
     apfs_set_roles "$T_ROLES" 1
 }
 

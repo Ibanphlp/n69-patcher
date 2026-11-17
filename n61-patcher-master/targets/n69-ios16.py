@@ -20,12 +20,13 @@ T_AMP = "CS35L19"
 # 第二系统根分区：s8 (disk0s1s8)——s4=Update/s5=xART/s6=Preboot/s7=Hardware 已被占用
 T_ROOT_PART = 8
 
-# 卷布局：在空闲槽位建 s8=SystemB / s9=DataB（role 0），最后改 role
+# s8 is the iOS 16 system volume, booted with rd=disk0s1s8. The stock Data
+# volume keeps role 0x40 and its systembag. Role 0x4 matches SevenUP's
+# Recovery role on the new volume. Do not move the iOS 15 System or Data roles.
 T_VOL_CREATE = "SystemB DataB"
-T_ROLES = "8:0x1 9:0x40"  # s8=SystemB(System), s9=DataB(Data); s4=Update, s5=xART, s6=Preboot, s7=Hardware 勿动
-
+T_ROLES = "8:0x4"
 T_DATA_PROTECTION = "none"
-# iOS15 的 SystemA/DataA 占着 System(0x1)/Data(0x40) role；iOS16 按 role 找 Data 卷，需降级旧持有者
+T_MNT_DATA_STOCK = 2
 T_ROLES_DEMOTE_OLD = 1
 T_MNT_SYSTEM_B = 8
 T_MNT_DATA_B = 9

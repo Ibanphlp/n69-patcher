@@ -150,9 +150,16 @@ ov_item() {   # source dest op mode uid gid offset before after checks
                     else mkdir -p \"\${dst%/*}\"; /bin/cp -p \"\$src\" \"\$dst\"; fi"
                 ;;
             copy-if-missing)
-                rsh "src=\"/mnt1/$path\"; dst=\"$remote\"; test -e \"\$src\";
+                local copied
+                copied="$(rsh "src=\"/mnt1/$path\"; dst=\"$remote\";
+                    if [ ! -e \"\$src\" ]; then printf 'skip-missing\n'; exit 0; fi
                     if [ -d \"\$src\" ]; then mkdir -p \"\$dst\"; /bin/cp -an \"\$src/.\" \"\$dst/\";
-                    elif [ ! -e \"\$dst\" ]; then mkdir -p \"\${dst%/*}\"; /bin/cp -p \"\$src\" \"\$dst\"; fi"
+                    elif [ ! -e \"\$dst\" ]; then mkdir -p \"\${dst%/*}\"; /bin/cp -p \"\$src\" \"\$dst\"; fi
+                    printf 'copied\n'")"
+                if [ "$copied" = "skip-missing" ]; then
+                    warn "  跳过（本机系统没有该文件）: /mnt1/$path"
+                    return 0
+                fi
                 ;;
         esac
         [ -n "$mode" ] && rsh "chmod $mode \"$remote\""

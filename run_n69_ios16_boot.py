@@ -11,6 +11,7 @@ Boot sequence:
 """
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -21,7 +22,8 @@ from dataclasses import dataclass
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from ios16se.build import (
-    BuildConfig, load_config, build_all, boot_flow, validate_boot_images, verify_sep_for_device, BuildError
+    BuildConfig, load_config, build_all, build_kernelcache, selected_identity,
+    boot_flow, validate_boot_images, verify_sep_for_device, BuildError
 )
 
 
@@ -259,6 +261,10 @@ def build_boot_images(config: BootConfig) -> bool:
 
         # Load config
         build_config = load_config(profile_path)
+        # CPID 0x8003 is the TSMC SE even when irecovery prints MODEL n69ap.
+        # The display donor follows the chip: j71tap for n69uap, j71sap for n69ap.
+        if isinstance(getattr(build_config, "target", None), dict):
+            build_config.target["board_config"] = config.device_board
 
         # Override boot mode
         import os
@@ -323,6 +329,11 @@ def send_boot_chain(config: BootConfig) -> bool:
         validate_boot_images((image, name) for image, name, _command in boot_chain)
     except BuildError as error:
         UI.error(str(error))
+        return False
+    manifest = json.loads(Path("artifacts/boot/boot.json").read_text())
+    from src.ios16se.trustcache import boot_trustcache_allowed
+    if not boot_trustcache_allowed(manifest):
+        UI.error("Refusing to send the unmarked stock trust cache. Run ./send_n69_boot.sh")
         return False
 
     if not irecovery.exists():
@@ -400,6 +411,12 @@ def main():
         help="Build mode (default: full)"
     )
     parser.add_argument(
+        "--board",
+        choices=["n69ap", "n69uap"],
+        default="n69ap",
+        help="n69ap is CPID 0x8000 (Samsung). n69uap is CPID 0x8003 (TSMC)."
+    )
+    parser.add_argument(
         "--boot", "-b",
         action="store_true",
         help="Send boot chain to device after building"
@@ -409,12 +426,18 @@ def main():
         action="store_true",
         help="Only build, don't boot"
     )
+    parser.add_argument(
+        "--kernel-only",
+        action="store_true",
+        help="Rebuild only the kernel. Reuses the iBSS that already booted; no USB decrypt."
+    )
 
     args = parser.parse_args()
 
     config = BootConfig(
         im4m_path=Path(args.im4m),
         boot_mode=args.mode,
+        device_board=args.board,
     )
 
     # Header
@@ -426,6 +449,56 @@ def main():
     print(f"{UI.c('NC')}")
     print(f"Mode: {UI.c('BOLD')}{config.boot_mode}{UI.c('NC')}")
     print(f"Started: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    if args.kernel_only:
+        import os
+        os.environ["BUILD_MODE"] = config.boot_mode
+        profile = load_config(Path("profiles/n69ap_ios16.toml"))
+        profile.target["board_config"] = config.device_board
+        required = (
+            "artifacts/boot/boot_iBSS.img4",
+            "artifacts/boot/boot_iBEC.img4",
+            "artifacts/boot/boot_DT.img4",
+            "artifacts/boot/boot_TC.img4",
+            "artifacts/boot/sep.img4",
+        )
+        missing = [name for name in required if not Path(name).is_file() or Path(name).stat().st_size == 0]
+        if missing:
+            UI.error("Missing boot images that do not need a rebuild: " + ", ".join(missing))
+            sys.exit(1)
+        try:
+            kernel = build_kernelcache(profile, Path("work/build"), config.im4m_path)
+        except BuildError as error:
+            UI.error(str(error))
+            sys.exit(1)
+        identity = selected_identity(profile)
+        manifest_path = Path("artifacts/boot/boot.json")
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
+        manifest.update({
+            "ibss": "artifacts/boot/boot_iBSS.img4",
+            "ibec": "artifacts/boot/boot_iBEC.img4",
+            "devicetree": "artifacts/boot/boot_DT.img4",
+            "trustcache": "artifacts/boot/boot_TC.img4",
+            "sep": "artifacts/boot/sep.img4",
+            "kernelcache": str(kernel),
+            "kernelcache_mode": config.boot_mode,
+            "soc_model": identity.model,
+            "soc_cpid": identity.cpid_text,
+            "donor_board": identity.donor_board,
+            "target": config.device_board,
+            "boot_args": profile.boot_args["args"],
+            "root_partition": profile.boot_args["root_partition"],
+        })
+        from ios16se.trustcache import mark_shared_data
+        text = json.dumps(mark_shared_data(manifest), indent=2) + "\n"
+        try:
+            manifest_path.write_text(text)
+        except PermissionError:
+            Path("/tmp/n69-boot.json").write_text(text)
+            UI.error("artifacts/boot/boot.json is owned by root. Run: sudo cp /tmp/n69-boot.json artifacts/boot/boot.json")
+            sys.exit(1)
+        UI.ok(f"Display kernel rebuilt without USB: {kernel}")
+        sys.exit(0)
 
     # Preflight
     if not config.im4m_path.exists():

@@ -22,25 +22,20 @@ class DisplayPinotPatch(KernelPatch):
         print(f"  [{self.name}] Display patch - transplanting PinotLCD into AppleDPDisplay footprint")
 
         donor = self.donor_kc or ctx.donor_kc
-        if not donor or not donor.exists():
-            print(f"  [{self.name}] WARNING: Donor kernel not found, skipping display transplant.")
-            return ctx.kernel_path
-
-        try:
-            result = apply(
-                source=ctx.kernel_path,
-                donor=donor,
-                work=ctx.work_dir,
-                OLD="com.apple.driver.AppleDPDisplay",
-                NAME="com.apple.driver.ApplePinotLCD",
-                SOURCE_MARKER=b"PinotLCD",
-                TARGET_MARKER=b"DPDisplay",
-                preserve_text_span=True,
-                registration_only=False,
-            )
-            print(f"  [{self.name}] Successfully transplanted PinotLCD")
-            return result
-        except Exception as exc:
-            print(f"  [{self.name}] Transplant skipped ({exc}); keeping kernel path.")
-            return ctx.kernel_path
+        if not donor or not Path(donor).is_file():
+            raise RuntimeError(f"{self.name}: SE kernel is required; the display driver was not skipped")
+        result = apply(
+            source=ctx.kernel_path,
+            donor=donor,
+            work=ctx.work_dir,
+            OLD="com.apple.driver.AppleDPDisplay",
+            NAME="com.apple.driver.ApplePinotLCD",
+            SOURCE_MARKER=b"PinotLCD",
+            TARGET_MARKER=b"DPDisplay",
+            preserve_text_span=True,
+            registration_only=False,
+        )
+        if b"com.apple.driver.ApplePinotLCD" not in Path(result).read_bytes():
+            raise RuntimeError(f"{self.name}: ApplePinotLCD is not in the patched kernel")
+        return result
 
