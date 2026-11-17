@@ -6,13 +6,51 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'src'))
 from ios16se.build import build_devicetree, decrypt_iboot, verify_kc_roundtrip, BuildError
 from ios16se.kc_patch import RemoveIpadDriversPatch, apply_patches
 from ios16se.sevenup.kc import plist
 from ios16se.append_wt_fix import extract_watchtower_tail
 
 class BuildTests(unittest.TestCase):
+    def test_img4_preflight_stops_before_device_on_ticket_mismatch(self):
+        import os
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            boot = root / "boot"
+            boot.mkdir()
+            for name in ("boot_iBSS", "boot_iBEC", "boot_DT", "boot_TC", "boot_KC", "sep"):
+                (boot / f"{name}.img4").write_bytes(b"fixture")
+            (root / "IM4M.bin").write_bytes(b"expected ticket")
+            fake_img4 = root / "img4"
+            fake_img4.write_text("#!/bin/sh\nexit 9\n")
+            fake_tool = root / "img4tool"
+            fake_tool.write_text(
+                "#!/bin/sh\n"
+                "while [ $# -gt 0 ]; do\n"
+                "  case \"$1\" in\n"
+                "    -m) ticket=$2; shift 2 ;;\n"
+                "    -p) payload=$2; shift 2 ;;\n"
+                "    *) image=$1; shift ;;\n"
+                "  esac\n"
+                "done\n"
+                "printf 'wrong ticket' > \"$ticket\"\n"
+                "printf payload > \"$payload\"\n"
+            )
+            fake_img4.chmod(0o755)
+            fake_tool.chmod(0o755)
+            env = dict(os.environ, N69_BOOT_DIR=str(boot), N69_IM4M=str(root / "IM4M.bin"),
+                       N69_IMG4_BIN=str(fake_img4), N69_IMG4TOOL_BIN=str(fake_tool),
+                       N69_LOG_DIR=str(root / "logs"), N69_PREFLIGHT_ONLY="1")
+            result = subprocess.run(["bash", str(ROOT / "send_n69_boot.sh")], cwd=root,
+                                    env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("IMG4 preflight failed for KernelCache", result.stderr)
+            self.assertNotIn("Press Enter", result.stdout)
+
     def test_prelink_removed_definitions_keep_types(self):
         xml = (b'<dict><key>_PrelinkInfoDictionary</key><array>'
                b'<dict><key>CFBundleIdentifier</key><string>com.test.Old</string>'

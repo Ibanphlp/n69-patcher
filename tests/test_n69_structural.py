@@ -118,6 +118,13 @@ class GuideTests(unittest.TestCase):
         profile = (ROOT / "profiles/n69ap_ios16.toml").read_text()
         self.assertIn("rd=disk0s1s8", profile)
 
+    def test_boot_script_has_ibec_logo_and_preserves_root_guard(self):
+        script = (ROOT / "send_n69_boot.sh").read_text()
+        self.assertIn('run_irecovery "show iBEC boot logo" -c "setpicture 0x1"', script)
+        self.assertIn("grep -a -q 'rd=disk0s1s8'", script)
+        self.assertIn("preflight_img4 \"$BOOT_DIR/boot_KC.img4\" KernelCache", script)
+        self.assertIn('IMG4 preflight failed for $label', script)
+
 
 if __name__ == "__main__":
     unittest.main()
