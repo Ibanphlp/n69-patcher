@@ -71,6 +71,8 @@ grep -a -q 'rd=disk0s1s8' artifacts/boot/boot_iBEC.img4 || {
     echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
     exit 1
 }
+LOGO="ramdisk-main/sshramdisk/bootlogo.img4"
+[[ -s "$LOGO" ]] || { echo "Missing iBEC boot logo: $LOGO" >&2; exit 1; }
 
 echo "The phone must be in DFU. From the ramdisk: hold Power and Home, release Power after about 8 seconds, keep holding Home until the screen stays black."
 read -r -p "Press Enter when the screen is black in DFU. "
@@ -95,6 +97,11 @@ for entry in "${components[@]}"; do
         esac
     elif [[ -n "$cmd" ]]; then
         "$IRECOVERY" -c "$cmd"
+    fi
+    if [[ "$name" == "iBEC" ]]; then
+        echo "Sending iBEC boot logo..."
+        "$IRECOVERY" -f "$LOGO"
+        "$IRECOVERY" -c "setpicture 0x1"
     fi
     # SevenUP waits 2s after iBSS and after iBEC. A9 does not receive go.
     if [[ "$name" == "iBSS" || "$name" == "iBEC" ]]; then
