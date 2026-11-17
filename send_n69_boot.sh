@@ -50,6 +50,29 @@ preflight_img4() {
         rm -rf "$output"
         return 1
     fi
+    if [[ "$label" == "KernelCache" ]] &&
+        ! python3 - "$payload" <<'PY'
+import sys
+from pathlib import Path
+from src.ios16se.complzss import decompress_bytes
+from src.ios16se.img4 import inspect_bytes
+try:
+    im4p = Path(sys.argv[1]).read_bytes()
+    info = inspect_bytes(im4p)
+    payload = im4p[info.payload_offset:info.payload_offset + info.payload_length]
+    compressed, kernel = decompress_bytes(payload)
+    tail_size = len(payload) - 0x180 - compressed.compressed_size
+    if tail_size != 0xc000:
+        raise ValueError(f"Watchtower tail has {tail_size:#x} bytes; expected 0xc000")
+except Exception as error:
+    raise SystemExit(f"invalid KernelCache complzss stream: {error}")
+print(f"KernelCache complzss OK: {len(kernel)} decoded bytes")
+PY
+    then
+        echo "IMG4 preflight failed for KernelCache: refusing an invalid compressed kernel." >&2
+        rm -rf "$output"
+        return 1
+    fi
     if [[ "$label" != "KernelCache" ]] &&
         ! "$IMG4" -i "$image" -M "$IM4M" -o "$output/repacked.img4" >>"$output/tool.log" 2>&1; then
         echo "IMG4 preflight failed for $label ($image)." >&2

@@ -2,6 +2,12 @@
 
 Objectif : séparer un échec avant iBEC, un rejet du KernelCache, un panic précoce et un blocage tardif. Les contrôles host ne prouvent pas que `launchd` a démarré.
 
+## Régression KernelCache corrigée
+
+L’ancien `mkcomplzss` encodait incorrectement les références LZSS (offset de fenêtre et longueur de correspondance) et autorisait des correspondances supérieures à la limite du format de 18 octets. Le KernelCache pouvait donc être transféré sans erreur USB, mais iBoot ne pouvait pas le décompresser; le logo pouvait rester affiché et l’appareil retourner en Recovery. Le build compile maintenant `tools/complzss/lzss.c` corrigé, vérifie la décompression octet pour octet du noyau patché et préserve les `0xc000` octets de Watchtower. Le preflight d’envoi rejette un KernelCache qui ne se décompresse pas.
+
+Pour reconstruire sans déchiffrement USB iBSS/iBEC : `python3 run_n69_ios16_boot.py --board n69uap --mode safe-minimal --kernel-only`, puis `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh`.
+
 ## Avant de connecter le téléphone
 
 1. Vérifier la branche/artifacts et ticket attendus, puis lancer `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh`. Il doit afficher quatre lignes `IMG4 preflight OK` (KernelCache, DeviceTree, TrustCache, SEP). Ce préflight parse chaque image, compare l’IM4M embarqué au ticket `state/IM4M.bin` et demande à `img4` d’accepter DT/TC/SEP avec ce ticket; pour le grand KC, `img4tool` extrait l’IMG4/IM4M. Il ne remplace pas une vérification de digest de payload contre le BuildManifest exact du board/device. En cas d’échec, conserver le message : le script s’arrête avant l’étape de connexion/DFU.

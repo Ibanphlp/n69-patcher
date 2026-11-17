@@ -137,10 +137,41 @@ class BuildTests(unittest.TestCase):
     def test_watchtower_refuses_guessed_tail(self):
         with self.assertRaises(ValueError): extract_watchtower_tail(b'X'*100000)
 
+    def test_complzss_encoder_roundtrips_apple_lzss_stream(self):
+        import random
+        import shutil
+        import subprocess
+        from ios16se.complzss import decompress_bytes
+
+        compiler = shutil.which("cc") or shutil.which("clang")
+        if compiler is None:
+            self.skipTest("cc/clang is required to exercise the native complzss encoder")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "kernel.raw"
+            output = root / "kernel.complzss"
+            rng = random.Random(69)
+            data = (b"N69 Apple LZSS test pattern " * 800) + bytes(rng.randrange(256) for _ in range(4096))
+            source.write_bytes(data)
+            executable = root / "mkcomplzss"
+            subprocess.run([
+                compiler, "-O2", "-std=c99", "-Wall", "-Wextra", "-Werror",
+                str(ROOT / "tools/complzss/mkcomplzss.c"),
+                str(ROOT / "tools/complzss/lzss.c"), "-o", str(executable),
+            ], check=True)
+            subprocess.run([str(executable), str(source), str(output)], check=True)
+            info, decoded = decompress_bytes(output.read_bytes())
+            self.assertEqual(info.uncompressed_size, len(data))
+            self.assertEqual(decoded, data)
+
     def test_roundtrip_checks_full_payload_and_ticket(self):
         def der(tag, data):
             length = len(data)
-            encoded = bytes([length]) if length < 128 else bytes([0x81, length])
+            if length < 128:
+                encoded = bytes([length])
+            else:
+                raw = length.to_bytes((length.bit_length() + 7) // 8, 'big')
+                encoded = bytes([0x80 | len(raw)]) + raw
             return bytes([tag]) + encoded + data
         def string(value): return der(0x16, value)
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,6 +180,22 @@ class BuildTests(unittest.TestCase):
             im4p = der(0x30, string(b'IM4P') + string(b'rkrn') + string(b'kernel') + der(4, original.read_bytes()))
             signed.write_bytes(der(0x30, string(b'IMG4') + im4p + der(0xa0, ticket.read_bytes())))
             self.assertTrue(verify_kc_roundtrip(signed, original, ticket, p/'unused'))
+            compressed = p/'kernel.complzss'
+            import subprocess
+            import shutil
+            compiler = shutil.which('cc') or shutil.which('clang')
+            if compiler:
+                executable = p/'mkcomplzss'
+                subprocess.run([compiler, '-O2', '-std=c99', str(ROOT/'tools/complzss/mkcomplzss.c'),
+                                str(ROOT/'tools/complzss/lzss.c'), '-o', str(executable)], check=True)
+                subprocess.run([str(executable), str(original), str(compressed)], check=True)
+                payload = compressed.read_bytes()
+                im4p_compressed = der(0x30, string(b'IM4P') + string(b'rkrn') + string(b'kernel') + der(4, payload))
+                signed_compressed = p/'signed-compressed'
+                signed_compressed.write_bytes(der(0x30, string(b'IMG4') + im4p_compressed + der(0xa0, ticket.read_bytes())))
+                self.assertTrue(verify_kc_roundtrip(signed_compressed, original, ticket, p/'unused', compressed))
+                compressed.write_bytes(payload + b'corruption')
+                self.assertFalse(verify_kc_roundtrip(signed_compressed, original, ticket, p/'unused', compressed))
             original.write_bytes(b'wrong payload')
             self.assertFalse(verify_kc_roundtrip(signed, original, ticket, p/'unused'))
             original.write_bytes(b'original payload'); ticket.write_bytes(b'wrong ticket')
