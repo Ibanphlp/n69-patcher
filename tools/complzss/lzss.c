@@ -1,14 +1,15 @@
-// Minimal LZSS compression for complzss
-// Based on standard LZSS with 4KB window, 18-bit offset/length encoding
-
+// Apple complzss LZSS encoder: 4096-byte ring, absolute ring positions,
+// matches of 3..18 bytes, and LSB-first literal flags.
 #include "lzss.h"
+#include <stdlib.h>
 #include <string.h>
 
 #define WINDOW_SIZE 4096
-#define MAX_MATCH 258
-#define THRESHOLD 3
+#define MAX_MATCH 18
+#define MIN_MATCH 3
+#define HASH_SIZE 65536
+#define SEARCH_LIMIT 128
 
-// Adler-32 checksum
 uint32_t lzadler32(const uint8_t* data, int32_t len) {
     uint32_t a = 1, b = 0;
     for (int32_t i = 0; i < len; i++) {
@@ -18,65 +19,64 @@ uint32_t lzadler32(const uint8_t* data, int32_t len) {
     return (b << 16) | a;
 }
 
-// Simple LZSS compression (not optimal but functional)
+static unsigned hash3(const uint8_t *p) {
+    return ((unsigned)p[0] * 251U * 251U + (unsigned)p[1] * 251U + p[2]) & (HASH_SIZE - 1);
+}
+
 uint8_t* compress_lzss(uint8_t* dst, uint32_t dst_size, const uint8_t* src, uint32_t src_size) {
-    uint8_t* dst_start = dst;
-    uint8_t* dst_end = dst + dst_size;
-    uint32_t src_pos = 0;
-    
-    // Output buffer for flags and data
-    uint8_t flags = 0;
-    int flag_bit = 0;
-    uint8_t* flag_pos = dst++;
-    
-    while (src_pos < src_size && dst < dst_end - 4) {
-        // Find best match in window
-        int best_len = 0;
-        int best_offset = 0;
-        int window_start = (src_pos > WINDOW_SIZE) ? src_pos - WINDOW_SIZE : 0;
-        
-        for (int i = window_start; i < (int)src_pos; i++) {
-            int len = 0;
-            while (len < MAX_MATCH && src_pos + len < src_size && 
-                   src[i + len] == src[src_pos + len]) {
-                len++;
+    int32_t *head = malloc(HASH_SIZE * sizeof(*head));
+    int32_t prev[WINDOW_SIZE];
+    if (!head) return NULL;
+    for (unsigned i = 0; i < HASH_SIZE; ++i) head[i] = -1;
+    for (unsigned i = 0; i < WINDOW_SIZE; ++i) prev[i] = -1;
+
+    uint32_t pos = 0, written = 0;
+    while (pos < src_size) {
+        if (written >= dst_size) { free(head); return NULL; }
+        uint32_t flag_pos = written++;
+        uint8_t flags = 0;
+        for (unsigned bit = 0; bit < 8 && pos < src_size; ++bit) {
+            unsigned best_len = 0;
+            int32_t best_pos = -1;
+            if (src_size - pos >= MIN_MATCH) {
+                int32_t candidate = head[hash3(src + pos)];
+                unsigned checked = 0;
+                while (candidate >= 0 && pos - (uint32_t)candidate <= WINDOW_SIZE && checked++ < SEARCH_LIMIT) {
+                    unsigned len = 0;
+                    while (len < MAX_MATCH && pos + len < src_size && src[candidate + len] == src[pos + len]) ++len;
+                    if (len > best_len) {
+                        best_len = len;
+                        best_pos = candidate;
+                        if (len == MAX_MATCH) break;
+                    }
+                    candidate = prev[(unsigned)candidate & (WINDOW_SIZE - 1)];
+                }
             }
-            if (len > best_len) {
-                best_len = len;
-                best_offset = src_pos - i;
-                if (best_len >= MAX_MATCH) break;
+            unsigned count;
+            if (best_len >= MIN_MATCH) {
+                if (dst_size - written < 2) { free(head); return NULL; }
+                unsigned index = ((unsigned)best_pos + WINDOW_SIZE - MAX_MATCH) & (WINDOW_SIZE - 1);
+                dst[written++] = (uint8_t)index;
+                dst[written++] = (uint8_t)(((index >> 4) & 0xf0) | (best_len - MIN_MATCH));
+                count = best_len;
+            } else {
+                if (written >= dst_size) { free(head); return NULL; }
+                flags |= (uint8_t)(1U << bit);
+                dst[written++] = src[pos];
+                count = 1;
             }
+            for (unsigned i = 0; i < count; ++i) {
+                uint32_t current = pos + i;
+                if (src_size - current >= MIN_MATCH) {
+                    unsigned hash = hash3(src + current);
+                    prev[current & (WINDOW_SIZE - 1)] = head[hash];
+                    head[hash] = (int32_t)current;
+                }
+            }
+            pos += count;
         }
-        
-        if (best_len >= THRESHOLD && dst + 2 <= dst_end) {
-            // Output match: flag=0, then offset/length
-            flags &= ~(1 << flag_bit);
-            // Encode: 12 bits offset, 4 bits length-3 (Apple format)
-            // Simplified: 2 bytes for offset (12 bits) + length (4 bits)
-            *dst++ = (best_offset >> 4) & 0xFF;
-            *dst++ = ((best_offset & 0xF) << 4) | ((best_len - 3) & 0xF);
-            src_pos += best_len;
-        } else {
-            // Output literal: flag=1, then byte
-            flags |= (1 << flag_bit);
-            if (dst >= dst_end) break;
-            *dst++ = src[src_pos++];
-        }
-        
-        flag_bit++;
-        if (flag_bit == 8) {
-            *flag_pos = flags;
-            flag_bit = 0;
-            flags = 0;
-            if (dst >= dst_end) break;
-            flag_pos = dst++;
-        }
+        dst[flag_pos] = flags;
     }
-    
-    // Flush remaining flags
-    if (flag_bit > 0) {
-        *flag_pos = flags;
-    }
-    
-    return dst;
+    free(head);
+    return dst + written;
 }

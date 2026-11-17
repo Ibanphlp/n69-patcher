@@ -14,12 +14,18 @@ int main(int argc, char **argv) {
     FILE *f = fopen(argv[1], "rb");
     if (!f) { perror("open in"); return 1; }
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
-    uint8_t *src = malloc(n);
-    if (fread(src, 1, n, f) != (size_t)n) { perror("read"); return 1; }
+    if (n <= 0 || (uint64_t)n > INT32_MAX) { fprintf(stderr, "invalid input size\n"); fclose(f); return 1; }
+    uint8_t *src = malloc((size_t)n);
+    if (!src) { fprintf(stderr, "out of memory\n"); fclose(f); return 1; }
+    if (fread(src, 1, n, f) != (size_t)n) { perror("read"); free(src); fclose(f); return 1; }
     fclose(f);
 
-    uint8_t *buf = malloc(0x180 + n + 256);
-    uint8_t *end = compress_lzss(buf + 0x180, (uint32_t)(n + 256), src, (uint32_t)n);
+    uint64_t capacity = (uint64_t)n + ((uint64_t)n + 7) / 8 + 1;
+    if (capacity > UINT32_MAX) { fprintf(stderr, "compressed buffer is too large\n"); return 1; }
+    uint8_t *buf = malloc(0x180 + (size_t)capacity);
+    if (!src || !buf) { fprintf(stderr, "out of memory\n"); return 1; }
+    uint8_t *end = compress_lzss(buf + 0x180, (uint32_t)capacity, src, (uint32_t)n);
+    if (!end) { fprintf(stderr, "compression failed\n"); free(buf); free(src); return 1; }
     uint32_t csize = (uint32_t)(end - (buf + 0x180));
     uint32_t adler = lzadler32(src, (int32_t)n);
 

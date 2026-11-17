@@ -588,22 +588,20 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     # inject_n69_drivers(...)
     final_kc = patched_kc
 
-    # Recompress with complzss (mkcomplzss)
+    # Build the compressor from the reviewed source. The historical vendored
+    # binaries encoded invalid LZSS matches and could make iBoot reject bootx.
     compressed_kc = work_dir / "final_kc.complzss"
-    complzss_bin = Path("tools/complzss/mkcomplzss")
-    # The checked-in mkcomplzss is a Linux ELF; prefer the macOS build we compile
-    # from the same source (tools/complzss/mkcomplzss.mac) on Darwin.
-    if not sys.platform.startswith("darwin"):
-        complzss_bin = Path("tools/complzss/mkcomplzss")
-    else:
-        mac_bin = Path("tools/complzss/mkcomplzss.mac")
-        complzss_bin = mac_bin if mac_bin.exists() else complzss_bin
-    if complzss_bin.exists():
-        print(f"  Compressing kernel with complzss: {complzss_bin}")
-        subprocess.run([str(complzss_bin), str(final_kc), str(compressed_kc)], check=True)
-        kernel_to_sign = compressed_kc
-    else:
-        raise BuildError("mkcomplzss not found; cannot produce the required compressed kernel")
+    compiler = shutil.which("cc") or shutil.which("clang")
+    if not compiler:
+        raise BuildError("A C compiler (cc or clang) is required to build the checked complzss encoder")
+    complzss_bin = work_dir / "mkcomplzss"
+    run_checked([
+        compiler, "-O2", "-std=c99", "-Wall", "-Wextra", "-Werror",
+        "tools/complzss/mkcomplzss.c", "tools/complzss/lzss.c", "-o", str(complzss_bin),
+    ], "Build complzss encoder")
+    print(f"  Compressing kernel with verified complzss encoder: {complzss_bin}")
+    run_checked([str(complzss_bin), str(final_kc), str(compressed_kc)], "Compress KernelCache")
+    kernel_to_sign = compressed_kc
 
     # Append watchtower
     full_kc = work_dir / "kc.full.complzss"
@@ -628,9 +626,9 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     # Verify the complete IMG4 payload and embedded ticket
     img4_bin = img4_tool.binary
 
-    # KC Roundtrip Verification
-    # Verify the signed KernelCache can be extracted and matches original
-    if verify_kc_roundtrip(output, kernel_to_sign, im4m, img4_bin):
+    # KC roundtrip now decodes complzss and compares against the patched raw kernel,
+    # while also checking that the appended Watchtower bytes survived packaging.
+    if verify_kc_roundtrip(output, final_kc, im4m, img4_bin, kernel_to_sign):
         print(f"  ✓ KC Roundtrip verification PASSED")
     else:
         print(f"  ✗ KC Roundtrip verification FAILED - kernel may not boot!")
@@ -639,12 +637,11 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
     return output
 
 
-def verify_kc_roundtrip(signed_kc: Path, original_raw: Path, im4m: Path, img4_bin: Path) -> bool:
-    """Verify the complete IMG4 payload and embedded ticket without decoding.
-
-    The bundled img4 cannot open this large IMG4; parsing its DER directly
-    avoids recompression, lossy partial comparisons and tool size limits.
-    """
+def verify_kc_roundtrip(
+    signed_kc: Path, original_raw: Path, im4m: Path, img4_bin: Path,
+    expected_compressed: Path | None = None,
+) -> bool:
+    """Verify IMG4 framing, ticket, compressed stream and decoded kernel bytes."""
     from .img4 import _element, inspect_bytes
     try:
         data = signed_kc.read_bytes()
@@ -660,11 +657,30 @@ def verify_kc_roundtrip(signed_kc: Path, original_raw: Path, im4m: Path, img4_bi
             return False
         im4p = data[im4p_start:cursor]
         info = inspect_bytes(im4p)
-        if info.image_type != "rkrn" or im4p[info.payload_offset:info.payload_offset + info.payload_length] != original_raw.read_bytes():
+        if info.image_type != "rkrn":
+            return False
+        payload = im4p[info.payload_offset : info.payload_offset + info.payload_length]
+        expected = original_raw.read_bytes()
+        if info.compression == "complzss":
+            from .complzss import decompress_bytes
+            decoded_info, decoded = decompress_bytes(payload)
+            if decoded_info.uncompressed_size != len(expected) or decoded != expected:
+                return False
+            if expected_compressed is not None and payload != expected_compressed.read_bytes():
+                return False
+        elif payload != expected:
             return False
         tag, a, b, cursor = _element(data, cursor, end)
         if tag != 0xa0 or cursor != end or data[a:b] != im4m.read_bytes():
             return False
+        if info.compression == "complzss":
+            from .complzss import decompress_bytes
+            compressed = im4p[info.payload_offset : info.payload_offset + info.payload_length]
+            decoded_info, decoded = decompress_bytes(compressed)
+            if decoded_info.uncompressed_size != len(original_raw.read_bytes()):
+                return False
+            if decoded != original_raw.read_bytes():
+                return False
         return True
     except (OSError, ValueError, IndexError) as error:
         print(f"    Roundtrip: verification error: {error}")
