@@ -99,19 +99,21 @@ apfs_write_block() {   # n file
     local size
     size="$(wc -c <"$file" | tr -d ' ')"
     [ "$size" -eq "$APFS_BS" ] || die "块 $n 本地镜像不是 ${APFS_BS} 字节（实际 $size）"
-    apfs_ssh_once "rm -f /tmp/n69-block" >/dev/null || die "块 $n 无法准备 /tmp/n69-block"
+    # The SSH ramdisk has /private/var/root and no /tmp. A redirect into
+    # /tmp fails before any byte reaches the disk.
+    apfs_ssh_once "mkdir -p /private/var/root && rm -f /private/var/root/n69-block" >/dev/null || die "块 $n 无法准备 /private/var/root/n69-block"
     off=0
     while [ "$off" -lt "$APFS_BS" ]; do
         chunk="$(dd if="$file" bs=1 skip="$off" count=256 2>/dev/null | od -An -v -tu1 | awk '{ for (i = 1; i <= NF; i++) printf "\\%03o", $i }')"
         [ "${#chunk}" -eq 1024 ] || die "块 $n 分段 $off 编码不完整"
-        apfs_ssh_once "printf '$chunk' >> /tmp/n69-block" >/dev/null || die "块 $n 分段 $off 发送失败"
+        apfs_ssh_once "printf '$chunk' >> /private/var/root/n69-block" >/dev/null || die "块 $n 分段 $off 发送失败"
         off=$(( off + 256 ))
     done
     for dev in "$APFS_RDEV" /dev/disk0s1; do
         rc=0
-        out="$(apfs_ssh_once "test \"\$(wc -c < /tmp/n69-block | tr -d ' ')\" = $APFS_BS && dd if=/tmp/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync")" || rc=$?
+        out="$(apfs_ssh_once "test \"\$(wc -c < /private/var/root/n69-block | tr -d ' ')\" = $APFS_BS && dd if=/private/var/root/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync")" || rc=$?
         if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '1+0 records in'; then
-            apfs_ssh_once "rm -f /tmp/n69-block" >/dev/null || true
+            apfs_ssh_once "rm -f /private/var/root/n69-block" >/dev/null || true
             return 0
         fi
         warn "块 $n 写入 $dev 失败: ${out:-ssh rc $rc}"
