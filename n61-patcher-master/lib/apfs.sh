@@ -481,9 +481,16 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
             [ "$prole" -ne 0 ] || continue
             for i in "${APFS_V_IDX[@]}"; do
                 case " $spec_idx " in *" $i "*) continue ;; esac
-                if [ "$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)" = "$prole" ]; then
-                    demoted="$demoted $i"
-                fi
+                cur="$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)"
+                [ "$cur" = "$prole" ] || continue
+                # iOS 15 stays bootable. System is 0x1 and Data is 0x40.
+                # Demote may only free the role named in the spec, and never those two.
+                case "$cur" in
+                    1|64)
+                        die "s$i holds System (0x1) or Data (0x40). Refusing to clear it."
+                        ;;
+                esac
+                demoted="$demoted $i"
             done
         done
         if [ -n "$demoted" ]; then

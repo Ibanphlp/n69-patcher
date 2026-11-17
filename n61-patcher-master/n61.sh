@@ -10,6 +10,7 @@
 #   cryptex        iOS16 SystemOS Cryptex 写入 s4 + Preboot 链接 [需 ramdisk + sudo]
 #   preboot        只重建 Preboot Cryptex 链接
 #   patch-rootfs   overlay + 收尾 + 改 role
+#   set-roles      只写 T_ROLES，不重做 rootfs                  [需 ramdisk]
 #   fix-icons      修复已安装 iOS13 的主屏图标（从 UI donor 补 staged App 图标）
 #   build          构建五个启动组件 boot_*.img4（iBSS/iBEC/DT/TC/KC）
 #   install        = volumes + rootfs + patch-rootfs
@@ -118,7 +119,7 @@ done
 
 [ -n "$STAGE" ] || { usage; exit 1; }
 case "$STAGE" in
-    ramdisk|extract-im4m|capture-sep|volumes|rootfs|cryptex|preboot|patch-rootfs|fix-icons|build|boot|install|all|status|list) ;;
+    ramdisk|extract-im4m|capture-sep|volumes|rootfs|cryptex|preboot|patch-rootfs|set-roles|fix-icons|build|boot|install|all|status|list) ;;
     *) die "未知阶段: ${STAGE}（--help 查看用法）" ;;
 esac
 
@@ -303,7 +304,7 @@ confirm_stage() {
 }
 
 if [ "$OPT_DRY_RUN" -eq 0 ]; then
-    case " volumes rootfs cryptex preboot patch-rootfs fix-icons install boot all " in
+    case " volumes rootfs cryptex preboot patch-rootfs set-roles fix-icons install boot all " in
         *" $STAGE "*)
             [ "$OPT_YES" -eq 1 ] || confirm_stage
             ;;
@@ -321,6 +322,9 @@ case "$STAGE" in
     cryptex)      stage_cryptex ;;
     preboot)      stage_preboot ;;
     patch-rootfs) stage_patch_rootfs ;;
+    set-roles)
+        if dry; then log "dry-run: skip role write"; else ssh_ensure; stage_set_roles; fi
+        ;;
     fix-icons)    stage_fix_icons ;;
     build)        stage_build ;;
     install)      stage_install ;;

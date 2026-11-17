@@ -33,6 +33,8 @@ T_VOL_CREATE="SystemB DataB"
 T_ROLES="8:0x4"
 T_DATA_PROTECTION="none"
 T_MNT_DATA_STOCK=2
+# Only a volume that already holds Recovery (0x4) is cleared, so s8 can take
+# that role. System (0x1) and Data (0x40) are refused by apfs_set_roles.
 T_ROLES_DEMOTE_OLD=1
 T_MNT_SYSTEM_B=8
 T_MNT_DATA_B=9
