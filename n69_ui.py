@@ -38,7 +38,10 @@ def probe_device() -> tuple[int, str]:
     tool = irecovery_path()
     if tool is None:
         return 1, "irecovery was not found in ramdisk-main/Darwin or tools/SSHRD_Script/Darwin."
-    result = subprocess.run([str(tool), "-q"], capture_output=True, text=True)
+    try:
+        result = subprocess.run([str(tool), "-q"], capture_output=True, text=True)
+    except OSError as error:
+        return 1, f"irecovery could not run: {error}"
     text = ((result.stdout or "") + (result.stderr or "")).strip()
     if result.returncode != 0 and not text:
         return result.returncode, "No device answered irecovery -q."
@@ -141,6 +144,31 @@ def command_for(action: Action, *, mode: str, board: str, sep: bool, dry_run: bo
     raise RuntimeError(f"unknown action {action.key}")
 
 
+MODE_COPY = {
+    "minimal": (
+        "Security patches only: AMFI, img4, the root hash, the volume seal, and developer mode. "
+        "No SE power chip and no display driver. This mode cannot light the screen."
+    ),
+    "safe-minimal": (
+        "Adds the SE power chip and the SEP request change. Still no display driver. "
+        "A lit black screen is as far as a running kernel can get in this mode."
+    ),
+    "full": (
+        "Adds Chestnut, the Pinot display driver, touch, and removal of the iPad display drivers. "
+        "This is the only mode that can draw a picture. Sound, Wi-Fi, charging, and vibration stay off."
+    ),
+}
+
+
+def run_plan(disk_install: bool) -> list[str]:
+    """Steps Start runs, in order. The board comes from the phone, not a switch."""
+
+    steps = ["kernel", "send"]
+    if disk_install:
+        steps = ["ramdisk", "capture", "volumes", "rootfs", "cryptex", "patch", *steps]
+    return steps
+
+
 def main() -> int:
     try:
         import customtkinter as ctk
@@ -160,84 +188,61 @@ def main() -> int:
     lines: queue.Queue[str | None] = queue.Queue()
 
     app.grid_columnconfigure(1, weight=1)
-    app.grid_rowconfigure(1, weight=1)
+    app.grid_rowconfigure(0, weight=1)
 
-    side = ctk.CTkFrame(app, width=300, corner_radius=0)
-    side.grid(row=0, column=0, rowspan=2, sticky="nsew")
-    side.grid_propagate(False)
+    side = ctk.CTkScrollableFrame(app, width=420, corner_radius=0)
+    side.grid(row=0, column=0, rowspan=3, sticky="nsew")
 
-    ctk.CTkLabel(side, text="N69 iOS 16", font=ctk.CTkFont(size=22, weight="bold")).pack(anchor="w", padx=18, pady=(18, 0))
-    ctk.CTkLabel(side, text="iPhone SE · tethered 16.7.16", text_color="#9aa4b2").pack(anchor="w", padx=18)
+    ctk.CTkLabel(side, text="N69 iOS 16", font=ctk.CTkFont(size=22, weight="bold")).pack(anchor="w", padx=8, pady=(8, 0))
+    ctk.CTkLabel(side, text="The phone is read on its own.", text_color="#9aa4b2").pack(anchor="w", padx=8)
 
-    status = ctk.CTkLabel(side, text="No device yet", anchor="w", fg_color="#243044", corner_radius=8)
-    status.pack(fill="x", padx=16, pady=(16, 8), ipady=8)
-
-    info = ctk.CTkTextbox(side, height=210, font=ctk.CTkFont(family="Menlo", size=12))
-    info.pack(fill="x", padx=16, pady=4)
-    info.insert("end", "Press Detect.\nDFU, Recovery, and the ramdisk all answer.")
-    info.configure(state="disabled")
+    status = ctk.CTkLabel(side, text="Looking for a phone…", anchor="w", fg_color="#243044", corner_radius=8)
+    status.pack(fill="x", padx=8, pady=(14, 8), ipady=8)
+    identity = ctk.CTkLabel(side, text="No device yet", anchor="w", justify="left")
+    identity.pack(anchor="w", padx=8, pady=(0, 8))
 
     mode = ctk.StringVar(value="full")
-    ctk.CTkLabel(side, text="Kernel").pack(anchor="w", padx=18, pady=(12, 0))
-    ctk.CTkSegmentedButton(side, values=["minimal", "safe-minimal", "full"], variable=mode).pack(fill="x", padx=16, pady=6)
+    ctk.CTkLabel(side, text="Kernel mode", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=8, pady=(8, 4))
+    for name in ("minimal", "safe-minimal", "full"):
+        ctk.CTkRadioButton(side, text=name, variable=mode, value=name).pack(anchor="w", padx=8, pady=(8, 0))
+        ctk.CTkLabel(side, text=MODE_COPY[name], wraplength=340, justify="left", text_color="#9aa4b2").pack(anchor="w", padx=28, pady=(2, 4))
 
-    board = ctk.StringVar(value="n69uap")
-    ctk.CTkLabel(side, text="Board").pack(anchor="w", padx=18)
-    ctk.CTkSegmentedButton(side, values=["n69uap", "n69ap"], variable=board).pack(fill="x", padx=16, pady=6)
-
+    disk_install = ctk.BooleanVar(value=False)
     sep = ctk.BooleanVar(value=False)
-    dry = ctk.BooleanVar(value=False)
-    recreate = ctk.BooleanVar(value=False)
-    ctk.CTkSwitch(side, text="Ramdisk SEP via iBoot", variable=sep).pack(anchor="w", padx=18, pady=4)
-    ctk.CTkSwitch(side, text="Dry run", variable=dry).pack(anchor="w", padx=18, pady=4)
-    ctk.CTkSwitch(side, text="Recreate DataB", variable=recreate).pack(anchor="w", padx=18, pady=4)
+    ctk.CTkSwitch(side, text="Also run the disk install", variable=disk_install).pack(anchor="w", padx=8, pady=(12, 2))
+    ctk.CTkLabel(
+        side,
+        text="Off: build the selected kernel and send it. On: ramdisk, SEP capture, volumes, rootfs, cryptex, and the role write first.",
+        wraplength=340, justify="left", text_color="#9aa4b2",
+    ).pack(anchor="w", padx=8, pady=(0, 6))
+    ctk.CTkSwitch(side, text="Load SEP in that ramdisk", variable=sep).pack(anchor="w", padx=8, pady=4)
 
-    ctk.CTkLabel(side, text="Mac password for sudo steps").pack(anchor="w", padx=18, pady=(10, 0))
-    password = ctk.CTkEntry(side, show="*", placeholder_text="Not saved")
-    password.pack(fill="x", padx=16, pady=6)
+    ctk.CTkLabel(side, text="Mac password").pack(anchor="w", padx=8, pady=(10, 0))
+    password = ctk.CTkEntry(side, show="*", placeholder_text="Used for sudo. Not saved.")
+    password.pack(fill="x", padx=8, pady=6)
 
-    main = ctk.CTkFrame(app, fg_color="transparent")
-    main.grid(row=0, column=1, sticky="nsew", padx=12, pady=(12, 0))
-    main.grid_columnconfigure(0, weight=1)
-    main.grid_rowconfigure(1, weight=1)
-
-    ctk.CTkLabel(main, text="Actions", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, sticky="w")
-    buttons = ctk.CTkFrame(main, fg_color="transparent")
-    buttons.grid(row=1, column=0, sticky="new", pady=8)
-    buttons.grid_columnconfigure(0, weight=1)
-
-    log_frame = ctk.CTkFrame(app, fg_color="transparent")
-    log_frame.grid(row=1, column=1, sticky="nsew", padx=12, pady=(0, 4))
-    log_frame.grid_rowconfigure(1, weight=1)
-    log_frame.grid_columnconfigure(0, weight=1)
-    ctk.CTkLabel(log_frame, text="Log", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, sticky="w")
-    log_box = ctk.CTkTextbox(log_frame, font=ctk.CTkFont(family="Menlo", size=12))
-    log_box.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+    log_box = ctk.CTkTextbox(app, font=ctk.CTkFont(family="Menlo", size=12))
+    log_box.grid(row=0, column=1, rowspan=2, sticky="nsew", padx=12, pady=12)
     progress = ctk.CTkProgressBar(app)
-    progress.grid(row=2, column=1, sticky="ew", padx=12, pady=(0, 8))
+    progress.grid(row=2, column=1, sticky="ew", padx=12, pady=(0, 12))
     progress.set(0)
 
     controls = ctk.CTkFrame(side, fg_color="transparent")
-    controls.pack(side="bottom", fill="x", padx=16, pady=16)
+    controls.pack(fill="x", padx=8, pady=16)
+    start_button = ctk.CTkButton(controls, text="Start")
+    start_button.pack(fill="x", pady=(0, 8))
     stop_button = ctk.CTkButton(controls, text="Stop", fg_color="#7f1d1d", hover_color="#991b1b", state="disabled")
     stop_button.pack(fill="x")
 
-    widgets: list[ctk.CTkButton] = []
+    board = {"name": ""}
+    cancel = threading.Event()
 
     def write_log(text: str) -> None:
         log_box.insert("end", text)
         log_box.see("end")
 
-    def set_info(text: str) -> None:
-        info.configure(state="normal")
-        info.delete("1.0", "end")
-        info.insert("end", text)
-        info.configure(state="disabled")
-
     def set_busy(busy: bool) -> None:
-        state = "disabled" if busy else "normal"
-        for widget in widgets:
-            widget.configure(state=state)
+        start_button.configure(state="disabled" if busy else "normal")
         stop_button.configure(state="normal" if busy else "disabled")
         if busy:
             progress.configure(mode="indeterminate")
@@ -251,99 +256,110 @@ def main() -> int:
         fields = fields_from_probe(text)
         chosen = board_from_probe(text)
         if chosen:
-            board.set(chosen)
+            board["name"] = chosen
         if not fields:
             status.configure(text="No device")
-            set_info(text)
+            identity.configure(text="Connect the phone.")
             return
         mode_name = fields.get("MODE", "Unknown")
-        pwned = "PWND" if "PWND" in text else "not pwned"
+        pwned = "pwned" if "PWND" in text else "not pwned"
         status.configure(text=f"{mode_name} · {pwned}")
-        rows = [
-            f"Name     {fields.get('NAME', '—')}",
-            f"Product  {fields.get('PRODUCT', '—')}",
-            f"Model    {fields.get('MODEL', '—')}",
-            f"CPID     {fields.get('CPID', '—')}",
-            f"ECID     {fields.get('ECID', '—')}",
-            f"Board    {chosen or 'unknown'}",
-            f"SCEP     {fields.get('SCEP', '—')}",
-        ]
-        set_info("\n".join(rows))
+        identity.configure(text=(
+            f"{fields.get('NAME', 'iPhone')}  {fields.get('PRODUCT', '')}\n"
+            f"CPID {fields.get('CPID', '—')}   {chosen or 'board unknown'}\n"
+            f"ECID {fields.get('ECID', '—')}"
+        ))
 
     def stop() -> None:
+        cancel.set()
         proc = runner["proc"]
-        if proc is None or proc.poll() is not None:
-            return
-        write_log("\n[!] Stopping.\n")
-        proc.terminate()
+        if proc is not None and proc.poll() is None:
+            lines.put("\n[!] Stopping.\n")
+            proc.terminate()
 
-    def run_action(action: Action) -> None:
-        if runner["proc"] is not None and runner["proc"].poll() is None:
-            return
-        if action.confirm:
-            dialog = ctk.CTkInputDialog(text=action.confirm + "\n\nType yes to continue.", title=action.label)
-            if (dialog.get_input() or "").strip().lower() != "yes":
-                write_log(f"[!] {action.label} cancelled.\n")
-                return
-        if action.sudo and not password.get():
-            write_log("[x] Enter the Mac password. It is not stored.\n")
-            return
-        try:
-            argv, extra = command_for(
-                action,
-                mode=mode.get(),
-                board=board.get(),
-                sep=bool(sep.get()),
-                dry_run=bool(dry.get()),
-                recreate_data=bool(recreate.get()),
-            )
-        except RuntimeError as error:
-            write_log(f"[x] {error}\n")
-            return
+    def launch(action: Action, board_name: str) -> int:
+        argv, extra = command_for(
+            action, mode=mode.get(), board=board_name,
+            sep=bool(sep.get()), dry_run=False, recreate_data=False,
+        )
         if action.sudo:
             argv = ["sudo", "-S", "-p", "", *argv]
-        write_log(f"\n$ {' '.join(argv)}\n")
+        lines.put(f"\n$ {' '.join(argv)}\n")
         environment = os.environ.copy()
         environment.update(extra)
-        try:
-            proc = subprocess.Popen(
-                argv,
-                cwd=ROOT,
-                env=environment,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-            )
-        except OSError as error:
-            write_log(f"[x] {error}\n")
-            return
+        proc = subprocess.Popen(
+            argv, cwd=ROOT, env=environment, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+        )
+        runner["proc"] = proc
         if proc.stdin is not None:
-            payload = ""
-            if action.sudo:
-                payload += password.get() + "\n"
-            # send_n69_boot.sh waits for Enter. The confirm dialog already
-            # asked, and a GUI pipe has no keyboard for that prompt.
+            payload = (password.get() + "\n") if action.sudo else ""
             if action.key == "send":
                 payload += "\n"
             if payload:
                 proc.stdin.write(payload)
                 proc.stdin.flush()
-        runner["proc"] = proc
-        set_busy(True)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            lines.put(line)
+            if cancel.is_set():
+                proc.terminate()
+                break
+        return proc.wait()
 
-        def reader() -> None:
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                lines.put(line)
-            code = proc.wait()
-            lines.put(f"\n[exit {code}]\n")
-            if action.key == "detect":
-                lines.put("__PROBE__\n")
+    def automatic() -> None:
+        code, text = probe_device()
+        lines.put(text + "\n")
+        lines.put("__REFRESH__\n")
+        chosen = board_from_probe(text)
+        if not chosen:
+            lines.put("[x] No N69 is connected. Start stays idle.\n")
             lines.put(None)
+            return
+        lines.put(f"[*] Board from the phone: {chosen}\n")
+        lines.put(f"[*] Kernel mode: {mode.get()}\n{MODE_COPY[mode.get()]}\n")
+        if disk_install.get() and not password.get():
+            lines.put("[x] The disk install needs the Mac password.\n")
+            lines.put(None)
+            return
+        by_key = {item.key: item for item in ACTIONS}
+        for key in run_plan(bool(disk_install.get())):
+            if cancel.is_set():
+                break
+            if key == "send":
+                lines.put("\n[*] Put the phone in DFU: hold Power and Home, release Power after 8 seconds, keep Home until the screen stays black.\n")
+                while not cancel.is_set():
+                    probe_code, probe_text = probe_device()
+                    fields = fields_from_probe(probe_text if probe_code == 0 else "")
+                    if fields.get("MODE", "").upper() == "DFU":
+                        lines.put("[*] DFU seen.\n")
+                        break
+                    threading.Event().wait(2)
+                if cancel.is_set():
+                    break
+            exit_code = launch(by_key[key], chosen)
+            lines.put(f"\n[exit {exit_code}]\n")
+            if exit_code != 0:
+                lines.put(f"[x] Stopped at {key}.\n")
+                break
+        lines.put(None)
 
-        threading.Thread(target=reader, daemon=True).start()
+    def start() -> None:
+        if runner["proc"] is not None and runner["proc"].poll() is None:
+            return
+        cancel.clear()
+        set_busy(True)
+        threading.Thread(target=automatic, daemon=True).start()
+
+    def watch_device() -> None:
+        if runner["proc"] is None or runner["proc"].poll() is not None:
+            code, text = probe_device()
+            if code == 0 and "CPID" in text:
+                refresh_probe(text)
+            else:
+                status.configure(text="No device")
+                identity.configure(text="Connect the phone in DFU, Recovery, or the ramdisk.")
+        app.after(2000, watch_device)
 
     def pump_with_probe() -> None:
         try:
@@ -355,7 +371,7 @@ def main() -> int:
                     log_box.insert("end", "\n")
                     log_box.see("end")
                     continue
-                if item == "__PROBE__\n":
+                if item == "__REFRESH__\n":
                     code, text = probe_device()
                     if code == 0:
                         refresh_probe(text)
@@ -366,20 +382,10 @@ def main() -> int:
             pass
         app.after(80, pump_with_probe)
 
+    start_button.configure(command=start)
     stop_button.configure(command=stop)
-    last_group = ""
-    for action in ACTIONS:
-        if action.group != last_group:
-            ctk.CTkLabel(buttons, text=action.group, font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(10, 2))
-            last_group = action.group
-        row = ctk.CTkFrame(buttons, fg_color="transparent")
-        row.pack(fill="x", pady=3)
-        button = ctk.CTkButton(row, text=action.label, width=180, command=lambda item=action: run_action(item))
-        button.pack(side="left")
-        widgets.append(button)
-        ctk.CTkLabel(row, text=action.detail, anchor="w", text_color="#9aa4b2").pack(side="left", padx=10)
-
     app.after(80, pump_with_probe)
+    app.after(400, watch_device)
     app.mainloop()
     return 0
 
