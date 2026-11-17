@@ -72,53 +72,32 @@ apfs_read_block_fresh() {
     apfs_read_block "$1"
 }
 
-apfs_ssh_once() {   # cmd
-    local cmd="$1" try rc out
-    for try in 1 2 3; do
-        rc=0
-        out="$(ssh_run "$cmd" 2>&1)" || rc=$?
-        if [ "$rc" -eq 0 ]; then
-            printf '%s\n' "$out"
-            return 0
-        fi
-        warn "SSH 命令失败，重开隧道（${try}/3）: ${out:-rc $rc}"
-        proxy_restart
-        ssh_ensure || true
-        sleep 1
-    done
-    printf '%s\n' "$out"
-    return "$rc"
-}
-
 apfs_write_block() {   # n file
-    local n="$1" file="$2" dev out rc payload off chunk
-    # sshpass consumes stdin during the password prompt, and the ramdisk has
-    # no base64. One 16 KB command also makes dropbear close the connection.
-    # Append 256-byte octal pieces, then copy the file onto the block only
-    # when it is exactly 4096 bytes.
-    local size
+    local n="$1" file="$2" dev rc try size
+    # Same transfer as SevenUP and n61's apfs_setrole.py: sshpass -e reads the
+    # password from SSHPASS, and the 4096 bytes stay on stdin for dd. The
+    # ramdisk root is read-only, so nothing is stored there.
     size="$(wc -c <"$file" | tr -d ' ')"
     [ "$size" -eq "$APFS_BS" ] || die "块 $n 本地镜像不是 ${APFS_BS} 字节（实际 $size）"
-    # The SSH ramdisk has /private/var/root and no /tmp. A redirect into
-    # /tmp fails before any byte reaches the disk.
-    apfs_ssh_once "mkdir -p /private/var/root && rm -f /private/var/root/n69-block" >/dev/null || die "块 $n 无法准备 /private/var/root/n69-block"
-    off=0
-    while [ "$off" -lt "$APFS_BS" ]; do
-        chunk="$(dd if="$file" bs=1 skip="$off" count=256 2>/dev/null | od -An -v -tu1 | awk '{ for (i = 1; i <= NF; i++) printf "\\%03o", $i }')"
-        [ "${#chunk}" -eq 1024 ] || die "块 $n 分段 $off 编码不完整"
-        apfs_ssh_once "printf '$chunk' >> /private/var/root/n69-block" >/dev/null || die "块 $n 分段 $off 发送失败"
-        off=$(( off + 256 ))
-    done
     for dev in "$APFS_RDEV" /dev/disk0s1; do
-        rc=0
-        out="$(apfs_ssh_once "test \"\$(wc -c < /private/var/root/n69-block | tr -d ' ')\" = $APFS_BS && dd if=/private/var/root/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync")" || rc=$?
-        if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '1+0 records in'; then
-            apfs_ssh_once "rm -f /private/var/root/n69-block" >/dev/null || true
-            return 0
-        fi
-        warn "块 $n 写入 $dev 失败: ${out:-ssh rc $rc}"
+        for try in 1 2 3; do
+            rc=0
+            SSHPASS="$SSH_PW" "$(tool sshpass)" -e ssh "${SSH_OPTIONS[@]}" \
+                -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -o LogLevel=ERROR -o ConnectTimeout=10 \
+                -p "$SSH_PORT" root@localhost \
+                "dd of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>/dev/null && sync" \
+                <"$file" || rc=$?
+            if [ "$rc" -eq 0 ]; then
+                return 0
+            fi
+            warn "块 $n 写入 $dev 失败，重开隧道（${try}/3）: ssh rc $rc"
+            proxy_restart
+            ssh_ensure || true
+            sleep 1
+        done
     done
-    die "块 $n 写入失败: ${out:-ssh rc $rc}"
+    die "块 $n 写入失败"
 }
 
 # ---------- 字段读取 ----------
