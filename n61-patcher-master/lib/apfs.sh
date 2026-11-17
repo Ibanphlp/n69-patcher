@@ -72,20 +72,46 @@ apfs_read_block_fresh() {
     apfs_read_block "$1"
 }
 
+apfs_ssh_once() {   # cmd
+    local cmd="$1" try rc out
+    for try in 1 2 3; do
+        rc=0
+        out="$(ssh_run "$cmd" 2>&1)" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            printf '%s\n' "$out"
+            return 0
+        fi
+        warn "SSH 命令失败，重开隧道（${try}/3）: ${out:-rc $rc}"
+        proxy_restart
+        ssh_ensure || true
+        sleep 1
+    done
+    printf '%s\n' "$out"
+    return "$rc"
+}
+
 apfs_write_block() {   # n file
-    local n="$1" file="$2" dev out rc payload size
-    # sshpass reads stdin while it watches for a password prompt, so a raw
-    # 4K image piped into `dd` never reaches the disk. The ramdisk has no
-    # /usr/bin/base64. Send octal escapes and let the remote shell printf
-    # rebuild the block, then refuse to touch the disk unless it is 4096 bytes.
+    local n="$1" file="$2" dev out rc payload off chunk
+    # sshpass consumes stdin during the password prompt, and the ramdisk has
+    # no base64. One 16 KB command also makes dropbear close the connection.
+    # Append 256-byte octal pieces, then copy the file onto the block only
+    # when it is exactly 4096 bytes.
+    local size
     size="$(wc -c <"$file" | tr -d ' ')"
     [ "$size" -eq "$APFS_BS" ] || die "块 $n 本地镜像不是 ${APFS_BS} 字节（实际 $size）"
-    payload="$(od -An -v -tu1 "$file" | awk '{ for (i = 1; i <= NF; i++) printf "\\%03o", $i }')"
-    [ "${#payload}" -eq $(( APFS_BS * 4 )) ] || die "块 $n 本地编码不完整"
+    apfs_ssh_once "rm -f /tmp/n69-block" >/dev/null || die "块 $n 无法准备 /tmp/n69-block"
+    off=0
+    while [ "$off" -lt "$APFS_BS" ]; do
+        chunk="$(dd if="$file" bs=1 skip="$off" count=256 2>/dev/null | od -An -v -tu1 | awk '{ for (i = 1; i <= NF; i++) printf "\\%03o", $i }')"
+        [ "${#chunk}" -eq 1024 ] || die "块 $n 分段 $off 编码不完整"
+        apfs_ssh_once "printf '$chunk' >> /tmp/n69-block" >/dev/null || die "块 $n 分段 $off 发送失败"
+        off=$(( off + 256 ))
+    done
     for dev in "$APFS_RDEV" /dev/disk0s1; do
         rc=0
-        out="$(ssh_run "printf '$payload' > /tmp/n69-block && test \"\$(wc -c < /tmp/n69-block | tr -d ' ')\" = $APFS_BS && /bin/dd if=/tmp/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && /bin/sync && rm -f /tmp/n69-block")" || rc=$?
+        out="$(apfs_ssh_once "test \"\$(wc -c < /tmp/n69-block | tr -d ' ')\" = $APFS_BS && dd if=/tmp/n69-block of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync")" || rc=$?
         if [ "$rc" -eq 0 ] && printf '%s\n' "$out" | grep -q '1+0 records in'; then
+            apfs_ssh_once "rm -f /tmp/n69-block" >/dev/null || true
             return 0
         fi
         warn "块 $n 写入 $dev 失败: ${out:-ssh rc $rc}"
