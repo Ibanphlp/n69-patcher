@@ -142,8 +142,9 @@ This verifies:
 
 ### Device automatically reboots to stock iOS after bootx
 - If the ramdisk logo disappears, iBoot likely attempted kernel handoff, but that alone does not identify a panic.
-- Rebuild the correct board/mode kernel: `python3 run_n69_ios16_boot.py --board n69uap --mode safe-minimal --kernel-only` for CPID 0x8003. Both minimal modes remove leftover iPad DisplayPort driver personalities; older images may not have done so.
-- Run `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh` before retrying and capture the latest panic report from Settings → Privacy & Security → Analytics & Improvements → Analytics Data if one is available.
+- The latest attempt used `minimal` with `remove_ipad_drivers` and still returned to iOS 15 after about 60 seconds. That makes driver cleanup an unconfirmed hypothesis, not a fix.
+- The current embedded iBEC arguments omit panic-hold and verbose flags. With the phone in DFU, rebuild the complete chain (including iBEC) for CPID 0x8003: `python3 run_n69_ios16_boot.py --board n69uap --mode minimal --build-only`. Do not use `--kernel-only` for this diagnostic; it would leave the old iBEC in place. The configured arguments include `panic-wait-forever=1`, `-v`, `keepsyms=1`, and `serial=3` so a panic may remain visible. This is diagnostic, not a confirmed fix.
+- Run `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh` before retrying. If it still restarts, note whether the verbose log shows panic text or the screen stays frozen; also check iOS 15 Analytics Data for a matching `panic-full`/`panic-base` report.
 
 ### Device reboots to recovery mode
 - Check boot-args: `rd=disk0s1s8` must match SystemB. `disk0s1s4` is Update, not the root.
@@ -154,17 +155,18 @@ This verifies:
 ### Kernel panics
 - Try `--mode safe-minimal` first.
 - The panic overlay draws only if Pinot/PE_Video has initialized. It also writes marker `0x4e363901` (panic entry), `0x4e363902` (formatter), then `0x4e363903` (stack capture) into its reserved kernel panic-state word. This is a RAM diagnostic marker, not persistent storage; collect it from a kernel memory dump/debugger or correlate it with serial diagnostics. No haptic call is made from panic context.
+- The configured iBEC arguments include `panic-wait-forever=1 -v keepsyms=1 serial=3`. Rebuild iBEC (not only the KernelCache) before relying on them. A visible panic or a persistent frozen screen is diagnostic evidence; a black screen alone is not.
 - Check the serial console for panic messages and the last reached boot stage.
 - Verify KASLR table rebuild in `append_wt_fix.py`.
 
 ### Serial/UART checklist (iPhone SE 1st gen)
-- Boot arguments in `profiles/n69ap_ios16.toml` already include `debug=0x2014e keepsyms=1 serial=3`; connect a 3.3 V TTL UART adapter through an iPhone SE (1st gen / Lightning) UART breakout/dock-flex accessory exposing the device's serial TX, RX and GND contacts. Lightning pin assignments are accessory/authentication-dependent: use a breakout with documented UART pin mapping for this exact SE revision; do not guess Lightning pin numbers or connect RS-232 voltage levels. Use a common ground and begin with the adapter's RX connected to device TX at 115200 baud, 8 data bits, no parity, 1 stop bit; TX is only needed if bidirectional input is required.
+- Boot arguments in `profiles/n69ap_ios16.toml` include `panic-wait-forever=1 -v debug=0x2014e keepsyms=1 serial=3`; connect a 3.3 V TTL UART adapter through an iPhone SE (1st gen / Lightning) UART breakout/dock-flex accessory exposing the device's serial TX, RX and GND contacts. Lightning pin assignments are accessory/authentication-dependent: use a breakout with documented UART pin mapping for this exact SE revision; do not guess Lightning pin numbers or connect RS-232 voltage levels. Use a common ground and begin with the adapter's RX connected to device TX at 115200 baud, 8 data bits, no parity, 1 stop bit; TX is only needed if bidirectional input is required.
 - On macOS, find the adapter as `/dev/tty.usbserial-XXXX` (or `/dev/cu.usbserial-XXXX`) with `ls /dev/{tty,cu}.usbserial*`, then start capture before boot: `screen /dev/tty.usbserial-XXXX 115200`.
 - Keep the serial terminal open while running `./send_n69_boot.sh`. Save the transcript, the matching `logs/boot-*.log`, whether/when the Apple logo appeared, and whether the phone stayed connected or returned to Recovery. A message through `launchd` is the evidence needed to establish a late successful kernel boot.
 - Without this cable/breakout, none of the observations above can by itself confirm a complete boot through `launchd`; they only narrow the possible causes (iBEC response, signature/artifact rejection, or a panic captured before display initialization).
 
 ### No serial output
-- Ensure debug flags: `debug=0x2014e keepsyms=1 serial=3` are in boot-args.
+- Ensure `panic-wait-forever=1 -v debug=0x2014e keepsyms=1 serial=3` are in the **rebuilt iBEC's** boot-args. A kernel-only rebuild does not update them.
 - Check the adapter's UART mapping/voltage level, common ground, TX-to-RX direction and baud rate; a standard charge/sync Lightning cable does not expose UART.
 
 ## References

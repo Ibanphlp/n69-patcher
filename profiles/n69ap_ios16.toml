@@ -21,10 +21,11 @@ donor_ipados16 = "iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw"
 # -v = verbose boot
 # amfi_get_out_of_my_way=1 = disable AMFI
 # cs_enforcement_disable=1 = disable code signing enforcement
-# wdt=-1 = disable watchdog
-# debug=0x2014e keepsyms=1 = debug flags
+# wdt=-1 = disable watchdog; panic-wait-forever=1 holds a panic for inspection.
+# Keep verbose output enabled while diagnosing the iPad-kernel transplant.
+# debug=0x2014e keepsyms=1 serial=3 = kernel diagnostics and symbol names.
 [boot_args]
-args = "rd=disk0s1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
+args = "rd=disk0s1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 panic-wait-forever=1 debug=0x2014e -v keepsyms=1 serial=3"
 root_partition = 8  # SystemB = disk0s1s8 (s4=Update, s5=xART are in use)
 
 # APFS Volume layout (inside container disk0s1)

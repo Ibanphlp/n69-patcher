@@ -114,11 +114,13 @@ class TrustCacheTests(unittest.TestCase):
 
 
 class GuideTests(unittest.TestCase):
-    def test_root_is_system_b(self):
+    def test_root_is_system_b_and_boot_args_hold_panics(self):
         guide = (ROOT / "N69AP_BOOT_GUIDE.md").read_text()
         self.assertNotIn("rd=disk0s1s4", guide)
         profile = (ROOT / "profiles/n69ap_ios16.toml").read_text()
         self.assertIn("rd=disk0s1s8", profile)
+        self.assertIn("panic-wait-forever=1", profile)
+        self.assertIn("debug=0x2014e -v keepsyms=1", profile)
 
     def test_boot_script_has_ibec_logo_and_preserves_root_guard(self):
         script = (ROOT / "send_n69_boot.sh").read_text()

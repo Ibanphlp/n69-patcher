@@ -36,7 +36,7 @@ class BootConfig:
     root_partition: int = 8
     boot_args: str = (
         "rd=disk0s1s8 amfi_get_out_of_my_way=1 "
-        "cs_enforcement_disable=1 wdt=-1 "
+        "cs_enforcement_disable=1 wdt=-1 panic-wait-forever=1 "
         "debug=0x2014e -v keepsyms=1 serial=3"
     )
 
