@@ -53,7 +53,15 @@ apfs_read_block() {
         fi
         sz="$(wc -c <"$f" | tr -d ' ')"
         warn "APFS block $n: SSH exit=$rc, bytes=$sz/$APFS_BS; $(cat "$err")"
-        [ "$try" -lt 3 ] && { warn "块 $n 读取失败，重试（${try}/3）"; sleep 1; }
+        if [ "$try" -lt 3 ]; then
+            warn "块 $n 读取失败，重试（${try}/3）"
+            # A live ramdisk still rejects the next login until the USB tunnel is new.
+            if [ "$rc" -eq 255 ]; then
+                proxy_restart
+                ssh_ensure || true
+            fi
+            sleep 1
+        fi
     done
     rm -f "$f"
     die "块 $n 读取失败（已重试 3 次；检查 ramdisk SSH 是否稳定）"
