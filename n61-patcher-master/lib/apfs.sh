@@ -65,12 +65,16 @@ apfs_read_block_fresh() {
 }
 
 apfs_write_block() {   # n file
-    local n="$1" file="$2" dev out rc
-    # A mounted container volume makes the raw write fail and used to hide
-    # dd's error. Try the raw node, then the block node, and keep the text.
+    local n="$1" file="$2" dev out rc b64 size
+    # sshpass reads stdin while it watches for a password prompt, so a raw
+    # 4K image piped into `dd` never reaches the disk. The same block reads
+    # back because reads do not use stdin. Send the block as base64 instead.
+    size="$(wc -c <"$file" | tr -d ' ')"
+    [ "$size" -eq "$APFS_BS" ] || die "块 $n 本地镜像不是 ${APFS_BS} 字节（实际 $size）"
+    b64="$(base64 <"$file" | tr -d '\n')"
     for dev in "$APFS_RDEV" /dev/disk0s1; do
         rc=0
-        out="$(ssh_run "dd of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && sync" <"$file")" || rc=$?
+        out="$(ssh_run "printf '%s' '$b64' | /usr/bin/base64 -D | /bin/dd of=$dev bs=$APFS_BS seek=$n count=1 conv=notrunc 2>&1 && /bin/sync")" || rc=$?
         if [ "$rc" -eq 0 ]; then
             return 0
         fi
