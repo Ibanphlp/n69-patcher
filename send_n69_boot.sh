@@ -6,6 +6,66 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+BOOT_DIR="${N69_BOOT_DIR:-artifacts/boot}"
+IM4M="${N69_IM4M:-state/IM4M.bin}"
+IMG4="${N69_IMG4_BIN:-ramdisk-main/Darwin/img4}"
+IMG4TOOL="${N69_IMG4TOOL_BIN:-ramdisk-main/Darwin/img4tool}"
+LOG_DIR="${N69_LOG_DIR:-logs}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/boot-$(date '+%Y%m%d-%H%M%S').log"
+IRECOVERY_OUTPUT=""
+
+run_irecovery() {
+    local step="$1" output rc
+    shift
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] irecovery: $step ($*)" | tee -a "$LOG_FILE"
+    if output="$("$IRECOVERY" "$@" 2>&1)"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    IRECOVERY_OUTPUT="$output"
+    if [[ -n "$output" ]]; then
+        printf '%s\n' "$output" | tee -a "$LOG_FILE"
+    fi
+    if (( rc != 0 )); then
+        echo "ERROR: irecovery step '$step' failed (exit $rc). See $LOG_FILE" | tee -a "$LOG_FILE" >&2
+        return "$rc"
+    fi
+}
+
+preflight_img4() {
+    local image="$1" label="$2" output ticket payload
+    output="$(mktemp -d)"
+    ticket="$output/ticket.im4m"
+    payload="$output/payload.im4p"
+    if [[ "$label" == "KernelCache" ]]; then
+        if ! "$IMG4TOOL" -e -m "$ticket" -p "$payload" "$image" >"$output/tool.log" 2>&1; then
+            echo "IMG4 preflight failed for $label: img4tool could not parse the IMG4/IM4M." >&2
+            cat "$output/tool.log" >&2
+            rm -rf "$output"
+            return 1
+        fi
+    elif ! "$IMG4" -i "$image" -M "$IM4M" >"$output/tool.log" 2>&1; then
+        echo "IMG4 preflight failed for $label ($image)." >&2
+        cat "$output/tool.log" >&2
+        rm -rf "$output"
+        return 1
+    elif ! "$IMG4TOOL" -e -m "$ticket" -p "$payload" "$image" >>"$output/tool.log" 2>&1; then
+        echo "IMG4 preflight failed for $label: img4tool could not extract embedded IM4M." >&2
+        cat "$output/tool.log" >&2
+        rm -rf "$output"
+        return 1
+    fi
+    if ! cmp -s "$ticket" "$IM4M"; then
+        echo "IMG4 preflight failed for $label: embedded IM4M does not match $IM4M." >&2
+        rm -rf "$output"
+        return 1
+    fi
+    rm -rf "$output"
+    echo "IMG4 preflight OK: $label"
+}
+
 mark_trustcache() {
     python3 - << 'PY'
 import json
@@ -31,17 +91,6 @@ else:
 PY
 }
 
-result="$(mark_trustcache)"
-if [[ "$result" == *NEED_ROOT* ]]; then
-    echo "artifacts/boot/boot.json is owned by root. Updating it with sudo."
-    sudo cp /tmp/n69-boot.json artifacts/boot/boot.json
-    sudo chown "$(id -un)" artifacts/boot/boot.json
-    rm -f /tmp/n69-boot.json
-    echo "Trust cache marked for the shared-data install. No Mach-O was replaced."
-else
-    printf '%s\n' "$result"
-fi
-
 if [[ -x ramdisk-main/Darwin/irecovery ]]; then
     IRECOVERY="ramdisk-main/Darwin/irecovery"
     GASTER="ramdisk-main/Darwin/gaster"
@@ -63,11 +112,29 @@ components=(
 )
 for entry in "${components[@]}"; do
     IFS=':' read -r img name cmd <<< "$entry"
-    [[ -s "artifacts/boot/${img}.img4" ]] || { echo "Missing artifacts/boot/${img}.img4" >&2; exit 1; }
+    [[ -s "$BOOT_DIR/${img}.img4" ]] || { echo "Missing $BOOT_DIR/${img}.img4" >&2; exit 1; }
 done
+[[ -s "$IM4M" ]] || { echo "Missing $IM4M" >&2; exit 1; }
+preflight_img4 "$BOOT_DIR/boot_KC.img4" KernelCache
+preflight_img4 "$BOOT_DIR/boot_DT.img4" DeviceTree
+preflight_img4 "$BOOT_DIR/boot_TC.img4" TrustCache
+preflight_img4 "$BOOT_DIR/sep.img4" SEP
+if [[ "${N69_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+    exit 0
+fi
+result="$(mark_trustcache)"
+if [[ "$result" == *NEED_ROOT* ]]; then
+    echo "artifacts/boot/boot.json is owned by root. Updating it with sudo."
+    sudo cp /tmp/n69-boot.json artifacts/boot/boot.json
+    sudo chown "$(id -un)" artifacts/boot/boot.json
+    rm -f /tmp/n69-boot.json
+    echo "Trust cache marked for the shared-data install. No Mach-O was replaced."
+else
+    printf '%s\n' "$result"
+fi
 # SevenUP refuses a full-iOS iBEC that does not name its root volume.
 # A9 uses disk0, not the A10 disk1 path.
-grep -a -q 'rd=disk0s1s8' artifacts/boot/boot_iBEC.img4 || {
+grep -a -q 'rd=disk0s1s8' "$BOOT_DIR/boot_iBEC.img4" || {
     echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
     exit 1
 }
@@ -77,7 +144,8 @@ LOGO="ramdisk-main/sshramdisk/bootlogo.img4"
 echo "The phone must be in DFU. From the ramdisk: hold Power and Home, release Power after about 8 seconds, keep holding Home until the screen stays black."
 read -r -p "Press Enter when the screen is black in DFU. "
 
-PROBE="$("$IRECOVERY" -q 2>&1 || true)"
+run_irecovery "DFU device probe" -q || exit $?
+PROBE="$IRECOVERY_OUTPUT"
 printf '%s\n' "$PROBE"
 printf '%s\n' "$PROBE" | grep -qi n69 || { echo "irecovery did not see an N69 in DFU." >&2; exit 1; }
 if [[ "$PROBE" != *"PWND"* ]]; then
@@ -89,19 +157,20 @@ fi
 for entry in "${components[@]}"; do
     IFS=':' read -r img name cmd <<< "$entry"
     echo "Sending ${name}..."
-    "$IRECOVERY" -f "artifacts/boot/${img}.img4"
+    run_irecovery "send ${name}" -f "$BOOT_DIR/${img}.img4" || exit $?
     if [[ "$cmd" == "go" ]]; then
-        case "$("$IRECOVERY" -q 2>/dev/null | awk '/CPID/ {print $2}')" in
-            0x8010|0x8011|0x8012|0x8015) "$IRECOVERY" -c go ;;
+        run_irecovery "query CPID before iBEC go" -q || exit $?
+        case "$(printf '%s\n' "$IRECOVERY_OUTPUT" | awk '/CPID/ {print $2}')" in
+            0x8010|0x8011|0x8012|0x8015) run_irecovery "iBEC go" -c go || exit $? ;;
             *) echo "(A9: not sending go)" ;;
         esac
     elif [[ -n "$cmd" ]]; then
-        "$IRECOVERY" -c "$cmd"
+        run_irecovery "${name} command: ${cmd}" -c "$cmd" || exit $?
     fi
     if [[ "$name" == "iBEC" ]]; then
         echo "Sending iBEC boot logo..."
-        "$IRECOVERY" -f "$LOGO"
-        "$IRECOVERY" -c "setpicture 0x1"
+        run_irecovery "send iBEC boot logo" -f "$LOGO" || exit $?
+        run_irecovery "show iBEC boot logo" -c "setpicture 0x1" || exit $?
     fi
     # SevenUP waits 2s after iBSS and after iBEC. A9 does not receive go.
     if [[ "$name" == "iBSS" || "$name" == "iBEC" ]]; then
@@ -112,5 +181,5 @@ for entry in "${components[@]}"; do
 done
 
 echo "Sending bootx..."
-"$IRECOVERY" -c bootx
+run_irecovery "bootx" -c bootx || exit $?
 echo "Boot chain sent. A black screen is not Setup.app. The serial log is the result that matters."
