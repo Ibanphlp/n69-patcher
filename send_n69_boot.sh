@@ -46,7 +46,7 @@ preflight_img4() {
             rm -rf "$output"
             return 1
         fi
-    elif ! "$IMG4" -i "$image" -M "$IM4M" >"$output/tool.log" 2>&1; then
+    elif ! "$IMG4" -i "$image" -M "$IM4M" -o "$output/repacked.img4" >"$output/tool.log" 2>&1; then
         echo "IMG4 preflight failed for $label ($image)." >&2
         cat "$output/tool.log" >&2
         rm -rf "$output"
