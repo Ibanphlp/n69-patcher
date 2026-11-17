@@ -39,26 +39,21 @@ preflight_img4() {
     output="$(mktemp -d)"
     ticket="$output/ticket.im4m"
     payload="$output/payload.im4p"
-    if [[ "$label" == "KernelCache" ]]; then
-        if ! "$IMG4TOOL" -e -m "$ticket" -p "$payload" "$image" >"$output/tool.log" 2>&1; then
-            echo "IMG4 preflight failed for $label: img4tool could not parse the IMG4/IM4M." >&2
-            cat "$output/tool.log" >&2
-            rm -rf "$output"
-            return 1
-        fi
-    elif ! "$IMG4" -i "$image" -M "$IM4M" -o "$output/repacked.img4" >"$output/tool.log" 2>&1; then
-        echo "IMG4 preflight failed for $label ($image)." >&2
-        cat "$output/tool.log" >&2
-        rm -rf "$output"
-        return 1
-    elif ! "$IMG4TOOL" -e -m "$ticket" -p "$payload" "$image" >>"$output/tool.log" 2>&1; then
-        echo "IMG4 preflight failed for $label: img4tool could not extract embedded IM4M." >&2
+    if ! "$IMG4TOOL" -e -m "$ticket" -p "$payload" "$image" >"$output/tool.log" 2>&1; then
+        echo "IMG4 preflight failed for $label: img4tool could not extract the original IMG4/IM4M." >&2
         cat "$output/tool.log" >&2
         rm -rf "$output"
         return 1
     fi
     if ! cmp -s "$ticket" "$IM4M"; then
         echo "IMG4 preflight failed for $label: embedded IM4M does not match $IM4M." >&2
+        rm -rf "$output"
+        return 1
+    fi
+    if [[ "$label" != "KernelCache" ]] &&
+        ! "$IMG4" -i "$image" -M "$IM4M" -o "$output/repacked.img4" >>"$output/tool.log" 2>&1; then
+        echo "IMG4 preflight failed for $label ($image)." >&2
+        cat "$output/tool.log" >&2
         rm -rf "$output"
         return 1
     fi
