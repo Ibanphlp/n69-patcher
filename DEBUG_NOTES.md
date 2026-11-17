@@ -4,7 +4,7 @@ Objectif : séparer un échec avant iBEC, un rejet du KernelCache, un panic pré
 
 ## Avant de connecter le téléphone
 
-1. Vérifier la branche/artifacts et ticket attendus, puis lancer `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh`. Il doit afficher quatre lignes `IMG4 preflight OK` (KernelCache, DeviceTree, TrustCache, SEP). En cas d’échec, conserver le message : le script s’arrête avant l’étape de connexion/DFU.
+1. Vérifier la branche/artifacts et ticket attendus, puis lancer `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh`. Il doit afficher quatre lignes `IMG4 preflight OK` (KernelCache, DeviceTree, TrustCache, SEP). Ce préflight parse chaque image, compare l’IM4M embarqué au ticket `state/IM4M.bin` et demande à `img4` d’accepter DT/TC/SEP avec ce ticket; pour le grand KC, `img4tool` extrait l’IMG4/IM4M. Il ne remplace pas une vérification de digest de payload contre le BuildManifest exact du board/device. En cas d’échec, conserver le message : le script s’arrête avant l’étape de connexion/DFU.
 2. Ouvrir une capture UART avant le boot si le câble est disponible : voir **N69AP_BOOT_GUIDE.md → Troubleshooting → Serial/UART checklist**. Enregistrer la session complète, pas seulement les lignes de panic.
 3. Mettre l’iPhone SE (1re génération) en DFU, démarrer `./send_n69_boot.sh`, confirmer l’invite lorsque l’écran est noir et noter l’heure de début. Le script crée `logs/boot-<timestamp>.log`; garder ce fichier et la sortie du terminal.
 
