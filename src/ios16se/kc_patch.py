@@ -234,12 +234,12 @@ class ComplzssRepackPatch(KernelPatch):
         # TODO: call mkcomplzss
         return ctx.kernel_path
 
-# safe-minimal is the PMU plus the reviewed SEP shim. full adds Chestnut,
-# Pinot and SPIN69. minimal is only the AMFI/img4/root-hash/seal/developer
-# patches. Audio, charger, Wi-Fi and haptics stay out of every boot mode.
+# Minimal modes remove leftover iPad DisplayPort personalities before boot.
+# safe-minimal adds the reviewed PMU and SEP shims; full adds Chestnut, Pinot,
+# and SPIN69. Audio, charger, Wi-Fi and haptics stay out of every boot mode.
 BOOT_MODES = {
-    "minimal": ("generic_security", "panic_overlay"),
-    "safe-minimal": ("generic_security", "pmu_d2255", "sep_legacy", "panic_overlay"),
+    "minimal": ("generic_security", "remove_ipad_drivers", "panic_overlay"),
+    "safe-minimal": ("generic_security", "remove_ipad_drivers", "pmu_d2255", "sep_legacy", "panic_overlay"),
     "full": ("generic_security", "pmu_d2255", "sep_legacy", "chestnut",
              "display_pinot", "touch_spin69", "remove_ipad_drivers", "panic_overlay"),
 }

@@ -35,7 +35,8 @@ If multiple slots are present, set `N69_PREBOOT_HASH` to the desired 96-characte
 
 ### Quick Start
 ```bash
-# safe-minimal builds the PMU transplant and the reviewed SEP request shim.
+# safe-minimal removes leftover iPad drivers, then adds PMU + SEP shims.
+# Use --board n69uap for TSMC devices (CPID 0x8003); run_boot.sh defaults to n69ap.
 # full adds Chestnut, Pinot and the SPIN69 personality.
 # Neither mode has been shown to reach SpringBoard. A host-side structural
 # pass is not a serial log of the SE PMU, the Pinot framebuffer, or launchd.
@@ -59,8 +60,8 @@ python run_n69_ios16_boot.py --im4m state/IM4M.bin --mode full --boot
 
 | Mode | Patches Applied | Use Case |
 |------|----------------|----------|
-| `safe-minimal` | remove_ipad_drivers, generic_security, pmu_d2255, sep_legacy | Safest for unknown hardware |
-| `minimal` | remove_ipad_drivers, generic_security | Basic boot without driver ports |
+| `safe-minimal` | generic_security, remove_ipad_drivers, pmu_d2255, sep_legacy, panic_overlay | Minimal boot with reviewed PMU/SEP shims |
+| `minimal` | generic_security, remove_ipad_drivers, panic_overlay | Basic boot without driver ports |
 | `full` | All patches | Full driver functionality (PMU, Display, Audio, WiFi, etc.) |
 
 ## Driver Transplants
@@ -138,6 +139,11 @@ This verifies:
 - All boot artifacts are built
 
 ## Troubleshooting
+
+### Device automatically reboots to stock iOS after bootx
+- If the ramdisk logo disappears, iBoot likely attempted kernel handoff, but that alone does not identify a panic.
+- Rebuild the correct board/mode kernel: `python3 run_n69_ios16_boot.py --board n69uap --mode safe-minimal --kernel-only` for CPID 0x8003. Both minimal modes remove leftover iPad DisplayPort driver personalities; older images may not have done so.
+- Run `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh` before retrying and capture the latest panic report from Settings → Privacy & Security → Analytics & Improvements → Analytics Data if one is available.
 
 ### Device reboots to recovery mode
 - Check boot-args: `rd=disk0s1s8` must match SystemB. `disk0s1s4` is Update, not the root.
