@@ -1,0 +1,8 @@
+#!/bin/bash
+# Open the N69 desktop control.
+set -euo pipefail
+cd "$(dirname "$0")"
+if ! python3 -c "import customtkinter" >/dev/null 2>&1; then
+    python3 -m pip install --user customtkinter
+fi
+exec python3 n69_ui.py
