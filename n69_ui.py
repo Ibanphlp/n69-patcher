@@ -155,7 +155,8 @@ MODE_COPY = {
     ),
     "full": (
         "Adds Chestnut, the Pinot display driver, touch, and removal of the iPad display drivers. "
-        "This is the only mode that can draw a picture. Sound, Wi-Fi, charging, and vibration stay off."
+        "This is the only mode that can draw a picture. If the kernel panics after the picture is up, "
+        "the panic text is drawn on the screen. Sound, Wi-Fi, charging, and vibration stay off."
     ),
 }
 

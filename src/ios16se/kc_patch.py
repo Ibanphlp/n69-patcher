@@ -238,10 +238,10 @@ class ComplzssRepackPatch(KernelPatch):
 # Pinot and SPIN69. minimal is only the AMFI/img4/root-hash/seal/developer
 # patches. Audio, charger, Wi-Fi and haptics stay out of every boot mode.
 BOOT_MODES = {
-    "minimal": ("generic_security",),
-    "safe-minimal": ("generic_security", "pmu_d2255", "sep_legacy"),
+    "minimal": ("generic_security", "panic_overlay"),
+    "safe-minimal": ("generic_security", "pmu_d2255", "sep_legacy", "panic_overlay"),
     "full": ("generic_security", "pmu_d2255", "sep_legacy", "chestnut",
-             "display_pinot", "touch_spin69", "remove_ipad_drivers"),
+             "display_pinot", "touch_spin69", "remove_ipad_drivers", "panic_overlay"),
 }
 
 
@@ -283,12 +283,14 @@ def apply_patches(kernel_path, patch_names, work_dir, im4m=None, config=None, do
         WatchtowerPatch(donor_kc),
         ComplzssRepackPatch(),
     ]
+    from .panic_screen import PanicOverlayPatch
+    patches.append(PanicOverlayPatch())
     for patch in patches:
         registry.register(patch)
     ordered = ["generic_security", "pmu_d2255", "chestnut",
                "display_pinot", "touch_spin69", "sep_legacy", "remove_ipad_drivers",
                "audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm",
-               "vibration_drv2604", "watchtower", "complzss_repack"]
+               "vibration_drv2604", "panic_overlay", "watchtower", "complzss_repack"]
     ordered = [name for name in ordered if name in patch_names]
     # A required driver that is absent from the output is not a boot kernel.
     required_markers = {
