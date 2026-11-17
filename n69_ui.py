@@ -174,7 +174,7 @@ def main() -> int:
 
     info = ctk.CTkTextbox(side, height=210, font=ctk.CTkFont(family="Menlo", size=12))
     info.pack(fill="x", padx=16, pady=4)
-    info.insert("end", "Press Detect. DFU, Recovery, and the ramdisk all answer irecovery.")
+    info.insert("end", "Press Detect.\nDFU, Recovery, and the ramdisk all answer.")
     info.configure(state="disabled")
 
     mode = ctk.StringVar(value="full")
@@ -202,12 +202,17 @@ def main() -> int:
     main.grid_rowconfigure(1, weight=1)
 
     ctk.CTkLabel(main, text="Actions", font=ctk.CTkFont(size=18, weight="bold")).grid(row=0, column=0, sticky="w")
-    buttons = ctk.CTkScrollableFrame(main, height=250)
-    buttons.grid(row=1, column=0, sticky="nsew", pady=8)
+    buttons = ctk.CTkFrame(main, fg_color="transparent")
+    buttons.grid(row=1, column=0, sticky="new", pady=8)
     buttons.grid_columnconfigure(0, weight=1)
 
-    log_box = ctk.CTkTextbox(app, font=ctk.CTkFont(family="Menlo", size=12))
-    log_box.grid(row=1, column=1, sticky="nsew", padx=12, pady=8)
+    log_frame = ctk.CTkFrame(app, fg_color="transparent")
+    log_frame.grid(row=1, column=1, sticky="nsew", padx=12, pady=(0, 4))
+    log_frame.grid_rowconfigure(1, weight=1)
+    log_frame.grid_columnconfigure(0, weight=1)
+    ctk.CTkLabel(log_frame, text="Log", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, sticky="w")
+    log_box = ctk.CTkTextbox(log_frame, font=ctk.CTkFont(family="Menlo", size=12))
+    log_box.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
     progress = ctk.CTkProgressBar(app)
     progress.grid(row=2, column=1, sticky="ew", padx=12, pady=(0, 8))
     progress.set(0)
