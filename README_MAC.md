@@ -14,7 +14,7 @@
 
 ### 2. Run Setup Script
 ```bash
-cd /path/to/n69ap-ios16-install
+cd /path/to/n69-patcher
 ./n69ap_mac_setup.sh
 ```
 
@@ -46,9 +46,9 @@ This downloads:
 2. **Device Check**: Confirms N69AP in DFU mode
 3. **Ramdisk**: Exploits checkm8 → SSH ramdisk on port 2222
 4. **IM4M**: Extracts device ticket (fully automated via SSH)
-5. **Volumes**: Creates SystemB (s4) and DataB (s5) APFS volumes
+5. **Volumes**: Creates or validates SystemB at s8. The final role is Recovery (0x04). The OS shares the existing iOS 15 Data volume (role 0x40). A legacy s9 is left in place. Migration can affect data used by iOS 15.
 6. **RootFS**: Streams ~9GB rootfs (25 min)
-7. **Patches**: Applies driver, keybag, UI resource patches
+7. **Patches**: Selects the core rootfs resources for every kernel mode and preserves the existing systembag
 8. **Build**: Creates boot images with TrustCache
 9. **Boot**: Sends iBSS → iBEC → DT → TC → SEP → KC → bootx
 
@@ -69,8 +69,8 @@ This downloads:
 
 ```bash
 ./n69ap_ios16_full_install.sh full
-./n69ap_ios16_full_install.sh minimal       # Security only
-./n69ap_ios16_full_install.sh safe-minimal   # PMU + SEP only
+./n69ap_ios16_full_install.sh minimal       # Common baseline
+./n69ap_ios16_full_install.sh safe-minimal   # Baseline plus PMU and legacy SEP
 ```
 
 The N69AP profile enables PMU, display power, LCD, touchscreen and SEP changes. Audio, Wi-Fi, charger and haptic patches are disabled. Touch ID remains unverified. [Driver coverage](N69AP_BOOT_GUIDE.md#driver-transplants)
@@ -100,47 +100,13 @@ N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
 
 ---
 
-## Expected Results
+## Evidence from the SE
 
-**Boot Probability**: ~85% for SpringBoard (grey icons) on first try
+The last user-reported state was a return to iOS 15. The donor kernel, SpringBoard and hardware initialization still require evidence from the same attempt. Record the mode, host image hashes and the time of any visible change on the SE. [Trial sheet](FICHE_ESSAI.md)
 
-**Success indicators**:
-- Device boots to SpringBoard (no spinning wheel)
-- Icons appear as grey placeholders
-- Can select language/country
+## Portable host audit
 
-**After boot**:
-1. Select language/country
-2. Connect to WiFi
-3. Sign in with Apple ID
-
----
-
-## Files in This Package
-
-```
-├── LICENSE                    # MIT License
-├── README.md                  # This file
-├── N69AP_BOOT_GUIDE.md        # Detailed technical guide
-├── FINAL_AUDIT_TABLE.md       # Patch verification table
-├── requirements.txt           # Python dependencies
-├── run_boot.sh                # Main orchestrator (macOS)
-├── run_n69_ios16_boot.py      # Python build script
-├── n69ap_ios16_full_install.sh # Full automated install
-├── n69ap_mac_setup.sh         # Auto-download tools + IPSWs
-├── n69ap_mac_install.sh       # Combined setup + install
-├── profiles/                  # Build configurations
-├── src/                       # Build scripts, SevenUP engine
-├── patches/                   # Driver transplant patches
-├── artifacts/                 # Boot images, kernels
-├── ramdisk-main/Darwin/       # macOS binaries (downloaded)
-├── ramdisk-main/Linux/        # Linux binaries (reference)
-├── firmware/                  # IPSW files (downloaded)
-├── tools/                     # Support tools (mkcomplzss)
-└── state/                     # IM4M.bin, device state
-```
-
----
+The mobile and Mac package scripts each produce a portable archive of the offline audit and its SevenUP Python dependencies. The repository checkout contains the installation tools. After extracting an audit archive, run `python3 research/audit_n69_transplants.py --help` from its root. Device tickets, firmware, boot images and logs stay on their original host.
 
 ## Power Before Boot
 

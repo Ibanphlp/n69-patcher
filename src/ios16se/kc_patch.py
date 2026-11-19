@@ -245,6 +245,9 @@ BOOT_MODES = {
 }
 
 
+DISABLED_HARDWARE = ("audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm", "vibration_drv2604")
+
+
 def patches_for_mode(mode: str, enabled: dict | None = None) -> list[str]:
     """Return the ordered patch names for one boot mode.
 
@@ -257,8 +260,7 @@ def patches_for_mode(mode: str, enabled: dict | None = None) -> list[str]:
     selected = list(BOOT_MODES[mode])
     if enabled is not None:
         selected = [name for name in selected if enabled.get(name, {}).get("enabled", True)]
-    blocked = {"audio_cs42l71", "audio_cs35l19", "charger_c26", "wifi_bcm", "vibration_drv2604"}
-    if blocked.intersection(selected):
+    if set(DISABLED_HARDWARE).intersection(selected):
         raise RuntimeError("audio, charger, Wi-Fi and haptics are not on the boot path")
     return selected
 

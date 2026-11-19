@@ -29,14 +29,13 @@ T_ROOT_PART=8
 # SevenUP keeps the stock Data role (0x40) on the existing volume and selects
 # the new system with rd=. Role 0x4 is Recovery, which is what SevenUP assigns
 # the new volume. Do not move the iOS 15 System or Data roles.
-T_VOL_CREATE="SystemB DataB"
+T_VOL_CREATE="SystemB"
 T_ROLES="8:0x4"
 T_DATA_PROTECTION="none"
 T_MNT_DATA_STOCK=2
 # Preserve existing roles on other volumes, including Recovery.
 T_ROLES_DEMOTE_OLD=0
 T_MNT_SYSTEM_B=8
-T_MNT_DATA_B=9
 T_MNT_SYSTEM12=1
 
 # ramdisk 配置

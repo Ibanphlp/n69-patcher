@@ -196,8 +196,7 @@ fi
 echo "Put the SE back in DFU mode if it is not already."
 read -p "Press Enter when device is in DFU mode..." -r
 require_n69_dfu
-# Unencrypted DataB copies stock keybags. The ramdisk stays SEP-off; a SEP
-# that never answers seputil --ping must not abort the install.
+# The existing Data volume keeps its systembag.
 N61_RAMDISK_SEP=0 ./n61.sh ramdisk --target n69-ios16
 
 # Flash volumes
@@ -205,7 +204,7 @@ echo ""
 echo -e "${CYAN}━━━ Flashing Volumes ━━━${NC}"
 
 ./n61.sh volumes --target n69-ios16 --data-protection none -y
-echo "✓ APFS volumes created"
+echo "SystemB ready in s8. The existing iOS 15 Data volume is shared."
 
 # Stream rootfs
 echo ""
@@ -224,6 +223,7 @@ echo "✓ Cryptex installed"
 echo ""
 echo -e "${CYAN}━━━ Finalizing ━━━${NC}"
 
+echo "Kernel mode: $MODE | Rootfs feature group: $FEATURES"
 ./n61.sh patch-rootfs --target n69-ios16 --features "$FEATURES" -y
 
 # Boot

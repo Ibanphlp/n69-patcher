@@ -34,7 +34,7 @@ from typing import Optional
 from .img4_tool import Img4Tool, get_img4_tool
 from .img4 import Im4pError, inspect as inspect_im4p
 from . import sep as captured_sep
-from .kc_patch import apply_patches
+from .kc_patch import apply_patches, patches_for_mode
 from .manifest import inventory, find_identity, extract_component
 from .devicetree import inspect as inspect_devicetree, diff as diff_devicetree
 from .complzss import decompress as decompress_complzss
@@ -554,7 +554,6 @@ def build_kernelcache(config: BuildConfig, work_dir: Path, im4m: Path) -> Path:
         raise BuildError("Failed to extract kernelcache payload")
     print(f"  Extracted kernel: {donor_kc_raw.stat().st_size} bytes")
 
-    from .kc_patch import patches_for_mode
     mode = os.environ.get("BUILD_MODE", "full")
     patch_names = patches_for_mode(mode, config.kernelcache_patches)
     print(f"  [{mode}] patches: {', '.join(patch_names)}")
@@ -716,6 +715,7 @@ def build_all(config: BuildConfig, im4m: Optional[Path] = None) -> BuildArtifact
     )
 
     # Write boot manifest (like n56's boot.json)
+    mode = os.environ.get("BUILD_MODE", "full")
     manifest_data = {
         "ibss": str(artifacts.ibss),
         "ibec": str(artifacts.ibec),
@@ -723,7 +723,8 @@ def build_all(config: BuildConfig, im4m: Optional[Path] = None) -> BuildArtifact
         "trustcache": str(artifacts.trustcache),
         "sep": str(artifacts.sep),
         "kernelcache": str(artifacts.kernelcache),
-        "kernelcache_mode": os.environ.get("BUILD_MODE", "full"),
+        "kernelcache_mode": mode,
+        "kernel_patches": patches_for_mode(mode, config.kernelcache_patches),
         "soc_model": selected_identity(config).model,
         "soc_cpid": selected_identity(config).cpid_text,
         "donor_board": selected_identity(config).donor_board,

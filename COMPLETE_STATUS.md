@@ -2,7 +2,7 @@
 
 SpringBoard is unproven. Do not treat this file as a completed boot.
 
-What is structurally built on `v0/sevenup-preboot-sep`: the Preboot SEP image is copied unchanged, the ramdisk stays SEP-off for unencrypted DataB, and the kernel builder can run reviewed SevenUP transplants for the D2255 PMU, Chestnut, Pinot and AppleMultitouchSPI. A structural pass means the engine accepted the bindings. It does not mean a phone reached SpringBoard. That stays unproven until a serial log shows the SE PMU probe, the Pinot framebuffer, and launchd.
+What is structurally built on `v0/sevenup-preboot-sep`: the Preboot SEP image is copied unchanged, the N69 storage path shares stock Data and its systembag, and the kernel builder can run reviewed SevenUP transplants for the D2255 PMU, Chestnut, Pinot and AppleMultitouchSPI. A structural pass means the engine accepted the bindings. It does not mean a phone reached SpringBoard. That stays unproven until a serial log shows the SE PMU probe, the Pinot framebuffer, and launchd.
 
 Audio, the CS35L19 amplifier, the C26 charger, Wi-Fi and haptics are not on the boot path.
 
@@ -26,7 +26,7 @@ All pipeline components have been updated for macOS/Darwin compatibility.
 | `cleanup_for_github.sh` | Updated output to mention Darwin |
 | `README_MAC.md` | **Created** - Mac-specific installation guide |
 | `MAC_INSTALL_STATUS.md` | **Created** - Complete installation status |
-| `create_mac_package.sh` | Creates portable tarball for Mac |
+| `create_mac_package.sh` | Packages the portable host-side audit for Mac |
 
 ## Existing Files (Not Modified)
 

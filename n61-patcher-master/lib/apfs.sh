@@ -245,6 +245,9 @@ apfs_volumes() {
         if [ "$oid" != "0" ]; then
             idx=$(( idx + 1 ))
             paddr="$(apfs_omap_lookup "$tree" "$toc" "$keystart" "$valend" "$nkeys" "$oid")"
+            if [ "${T_NAME:-}" = "n69-ios16" ]; then
+                [ -n "$paddr" ] && [ "$idx" -eq "$((i + 1))" ] || die "Ambiguous N69 APFS slot inventory."
+            fi
             if [ -n "$paddr" ]; then
                 blk="$(apfs_read_block "$paddr")" || die "s$idx: 读取卷超级块失败"
                 magic_is "$blk" 32 APSB || die "s$idx: 块 $paddr 不是卷超级块"
@@ -312,16 +315,31 @@ apfs_list() {
 apfs_create_volumes() {   # names encrypt(0/1)
     local names="$1" encrypt="$2" s name flag want_last
     s="$(slices)" || die "无法读取 APFS 卷列表；已中止建卷。"
-    case " $s " in *"disk0s1s${T_MNT_DATA_B} "*)
-        log "s${T_MNT_SYSTEM_B}/s${T_MNT_DATA_B} 已存在，跳过: $s"
-        return 0
-        ;;
-    esac
-    case " $s " in *"disk0s1s${T_MNT_SYSTEM_B} "*)
-        warn "s${T_MNT_SYSTEM_B} 已存在，只补建 DataB: $s"
-        names="${names#* }"
-        ;;
-    esac
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        # Only create on the original, contiguous s1..s7 layout. A hole or
+        # higher slice makes the slot the allocator will use ambiguous.
+        local slice idx count=0 seen=" "
+        for slice in $s; do
+            idx="${slice##*disk0s1s}"
+            case "$idx" in [1-7]) ;; *) die "Unexpected APFS slice before SystemB creation: $slice" ;; esac
+            case "$seen" in *" $idx "*) die "Duplicate APFS slice: $slice" ;; esac
+            seen="$seen$idx "
+            count=$((count + 1))
+        done
+        [ "$count" -eq 7 ] && [ "$names" = "SystemB" ] && [ "$encrypt" = 0 ] ||
+            die "Expected only SystemB to be created after s1..s7."
+    else
+        case " $s " in *"disk0s1s${T_MNT_DATA_B} "*)
+            log "s${T_MNT_SYSTEM_B}/s${T_MNT_DATA_B} 已存在，跳过: $s"
+            return 0
+            ;;
+        esac
+        case " $s " in *"disk0s1s${T_MNT_SYSTEM_B} "*)
+            warn "s${T_MNT_SYSTEM_B} 已存在，只补建 DataB: $s"
+            names="${names#* }"
+            ;;
+        esac
+    fi
     # newfs_apfs 只会把新卷追加到下一个空闲槽位：必须正好落在 清单里的 SystemB/DataB 槽位，
     # 否则后面会把别的卷（Update/xART/Preboot…）当成目标并清空。
     want_last=$(( T_MNT_SYSTEM_B - 1 ))
@@ -456,6 +474,7 @@ apfs_report_data_encryption() {   # data_name
 # 确保 DataB 以「可写」方式挂到 /mnt7（protect 优先，失败/只读则退回 plain）
 # 实机踩过：/mnt7 已挂载但只读，tar 写每个文件都报 "Operation not permitted"。
 mount_data_b() {
+    [ "${T_NAME:-}" != "n69-ios16" ] || die "N69 has no separate DataB mount."
     local dev="/dev/disk0s1s$T_MNT_DATA_B" mode mline
     if ssh_run "/sbin/mount | /usr/bin/grep -q \"$dev on /mnt7\"" >/dev/null 2>&1; then
         mline="$(ssh_run "/sbin/mount | /usr/bin/grep \" on /mnt7 \"" 2>/dev/null || true)"
@@ -494,6 +513,7 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
     apfs_volumes
     if [ "${T_NAME:-}" = "n69-ios16" ]; then
         guard_target_slot "$T_MNT_SYSTEM_B" "${T_VOL_CREATE%% *}"
+        guard_n69_shared_layout
     fi
     # 旧系统（iOS15 的 SystemA/DataA）已占用 System/Data role 时，iOS16 靠 role 找 Data 卷，
     # 必须把旧持有者降为 role 0；仅在清单显式设置 T_ROLES_DEMOTE_OLD=1 时执行（每个块先备份）。
@@ -600,33 +620,40 @@ guard_target_slot() {   # slice expected_name
     if [ "${T_NAME:-}" = "n69-ios16" ]; then
         role="$(rd_u16 "$block" "$APFS_ROLE_OFF")" || die "Could not read the APFS s$idx role."
         case "$idx:$role" in
-            "$T_MNT_SYSTEM_B:0"|"$T_MNT_SYSTEM_B:4"|"$T_MNT_DATA_B:0") ;;
+            "$T_MNT_SYSTEM_B:0"|"$T_MNT_SYSTEM_B:4") ;;
             *) die "APFS s$idx '$name' has unexpected role $role. Refusing to modify this volume." ;;
         esac
     fi
 }
 
-guard_n69_recovery_role() (
-    # Keep the preflight inventory separate from later volume creation.
-    APFS_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/n69-apfs-preflight.XXXXXX")" ||
-        die "Could not create temporary APFS inventory."
-    trap apfs_cleanup EXIT
-    apfs_volumes
-    local idx
+guard_n69_shared_layout() {
+    local idx role data_count=0
     for idx in "${APFS_V_IDX[@]}"; do
+        apfs_checksum_ok "${APFS_V_BLOCK[$idx]}" || die "APFS s$idx has an invalid checksum."
+        role="$(rd_u16 "${APFS_V_BLOCK[$idx]}" "$APFS_ROLE_OFF")" || die "Unreadable APFS role at s$idx."
+        if [ "$role" = "64" ]; then
+            [ "$idx" -lt "$T_MNT_SYSTEM_B" ] || die "Unexpected Data role at s$idx."
+            data_count=$((data_count + 1))
+        fi
         [ "$idx" = "$T_MNT_SYSTEM_B" ] && continue
-        if [ "$(rd_u16 "${APFS_V_BLOCK[$idx]}" "$APFS_ROLE_OFF")" = "4" ]; then
+        if [ "$role" = "4" ]; then
             die "APFS s$idx already holds the Recovery role. Stopping before installation writes."
         fi
     done
-)
+    [ "$data_count" -eq 1 ] || die "Expected one existing stock Data volume."
+}
 
 # 破坏性阶段前确认目标槽位真的是 SystemB / DataB，绝不碰原有卷（Update/xART/Preboot/...）
 guard_target_volumes() {   # [system|data|both]
     local what="${1:-both}" data_name sys_name
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        [ "$what" != "data" ] || die "N69 has no separate DataB target."
+        what=system
+    fi
     data_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $2}')"
     sys_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $1}')"
     apfs_volumes
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then guard_n69_shared_layout; fi
     if [ "$what" != "data" ]; then
         guard_target_slot "$T_MNT_SYSTEM_B" "$sys_name"
     fi

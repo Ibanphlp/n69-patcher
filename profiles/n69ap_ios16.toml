@@ -17,7 +17,7 @@ donor_ipados16 = "iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw"
 # app_donor_ios15 = "iPhone_4.7_64bit_15.8.8_19H422_Restore.ipsw"
 
 # Boot arguments for iBEC (like n56-patcher's boot_args)
-# rd=disk0s1s8 = root device is SystemB (partition 4)
+# rd=disk0s1s8 = root device is SystemB (partition 8)
 # -v = verbose boot
 # amfi_get_out_of_my_way=1 = disable AMFI
 # cs_enforcement_disable=1 = disable code signing enforcement
@@ -34,8 +34,9 @@ root_partition = 8  # SystemB = disk0s1s8 (s4=Update, s5=xART are in use)
 # SystemA (existing iOS 15) = disk0s1s1 (role 1)
 # DataA (existing iOS 15) = disk0s1s2 (role 64)
 # BasebandData = disk0s1s3 (role 128)
-system_b = { name = "SystemB", role = 1, partition = 8 }    # disk0s1s8
-data_b = { name = "DataB", role = 64, partition = 9 }       # disk0s1s9
+system_b = { name = "SystemB", role = 4, partition = 8 }
+# Stock Data is identified by its existing role. An old DataB is left alone.
+shared_data = { source = "stock", role = 64 }
 # baseband_b = { name = "BasebandB", role = 128, partition = 3 }  # Keep original
 
 # Component sources (which IPSW provides what)

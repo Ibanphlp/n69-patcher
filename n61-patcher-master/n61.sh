@@ -5,9 +5,9 @@
 #   ramdisk        进 iOS12.5.8 SSH ramdisk（DFU→gaster→发送 SSHRD 链→SSH 就绪）
 #   extract-im4m   提取本机 IM4M；N69 从 Preboot SEP 捕获
 #   capture-sep    捕获 N69 Preboot 中完整 SEP IMG4 及其中的 IM4M [需 ramdisk]
-#   volumes        建 s4 SystemB / s5 DataB（role 0）              [需 ramdisk]
-#   rootfs         把 iOS13.7 rootfs 流式写入 s4（~25 分钟）        [需 ramdisk + sudo]
-#   cryptex        iOS16 SystemOS Cryptex 写入 s4 + Preboot 链接 [需 ramdisk + sudo]
+#   volumes        N69: SystemB s8, shared stock Data. N61: SystemB s4 / DataB s5.              [需 ramdisk]
+#   rootfs         Stream rootfs to the target SystemB        [需 ramdisk + sudo]
+#   cryptex        Write SystemOS Cryptex to SystemB + Preboot link [需 ramdisk + sudo]
 #   preboot        只重建 Preboot Cryptex 链接
 #   patch-rootfs   overlay + 收尾 + 改 role
 #   set-roles      只写 T_ROLES，不重做 rootfs                  [需 ramdisk]
@@ -30,11 +30,11 @@
 #   --fresh                  本次用带时间戳的新工作目录（不能与 --workdir 同用）
 #   --dry-run                只演练：校验选挂/依赖，不碰设备、不产出
 #   --allow-manual           执行标记为 manual 的补丁
-#   --recreate-data          volumes 前删除已有 DataB（上次建卷中断/加密状态不符时用）
+#   --recreate-data          Separate-Data targets only. volumes 前删除已有 DataB（上次建卷中断/加密状态不符时用）
 #   --no-identity-check      boot 时不校验设备身份
 #   -y, --yes                跳过破坏性阶段的确认
 #
-# 注：bash 版目前只提供 N61（iPhone 6）清单；N56 清单仅 Python 版提供。
+# N69 uses the shared stock Data layout.
 set -uo pipefail
 
 # ---------- 定位仓库（支持 symlink / PATH 调用）----------
@@ -140,7 +140,7 @@ T_UI_DONOR="${T_UI_DONOR:-n66}"
 T_PRIMARY_DONOR="${T_PRIMARY_DONOR:-n66}"
 _pri="$(printf '%s' "$T_PRIMARY_DONOR" | tr 'a-z' 'A-Z')"
 
-for _v in T_MODEL T_ROOT_PART T_VOL_CREATE T_ROLES T_MNT_SYSTEM_B T_MNT_DATA_B \
+for _v in T_MODEL T_ROOT_PART T_VOL_CREATE T_ROLES T_MNT_SYSTEM_B \
           T_MNT_SYSTEM12 T_RAMDISK_PORT T_RAMDISK_DIR T_BASE_DT T_BASE_KC \
           T_IPSW_${_pri} T_IPSW_J96 T_ROOTFS_ENTRY_${_pri} T_ROOTFS_ENTRY_J96 \
           T_DERIVED_IBSS T_DERIVED_IBEC T_DERIVED_J96_KERNEL T_DERIVED_TRUSTCACHE \
@@ -148,6 +148,9 @@ for _v in T_MODEL T_ROOT_PART T_VOL_CREATE T_ROLES T_MNT_SYSTEM_B T_MNT_DATA_B \
     eval "val=\${$_v:-}"
     [ -n "$val" ] || die "目标清单 ${T_NAME} 缺少变量 ${_v}"
 done
+if [ "$T_NAME" != "n69-ios16" ]; then
+    [ -n "${T_MNT_DATA_B:-}" ] || die "Target requires a DataB slot."
+fi
 unset _v _pri
 
 # load_target 之后再加载：lib/ssh.sh 在 source 时读取 T_RAMDISK_PORT 等
@@ -177,8 +180,7 @@ fi
 if [ -n "$OPT_DATA_PROTECTION" ]; then
     T_DATA_PROTECTION="$OPT_DATA_PROTECTION"
 elif [ "${T_NAME:-}" = "n69-ios16" ]; then
-    # Unencrypted DataB is the N69 path. An omitted flag must not fall through
-    # to the encrypted default and then refuse the volume that already exists.
+    # Shared Data needs no newly encrypted volume.
     T_DATA_PROTECTION="none"
 elif [ -z "${T_DATA_PROTECTION+set}" ]; then
     T_DATA_PROTECTION="encrypted"

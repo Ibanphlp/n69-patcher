@@ -27,6 +27,7 @@ jobs:
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_evidence.py' -v
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_spin69_audit.py' -v
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_apfs_diagnostics.py' -v
+          python -W error::ResourceWarning -m unittest discover -s tests -p 'test_package_audit.py' -v
       - name: Check Bash syntax and shell entry point
         run: |
           git ls-files -z -- '*.sh' n69ui | xargs -0 -n 1 bash -n

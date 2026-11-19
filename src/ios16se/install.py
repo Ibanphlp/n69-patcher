@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 N69AP iOS 16 Installation Pipeline
-Complete end-to-end installation: volumes, rootfs streaming, patches, boot
+Legacy preview of the shell storage stages
 """
 
 import argparse
@@ -32,8 +32,7 @@ class InstallConfig:
     log_file: Path = Path("work/install/install.log")
 
     # Volumes
-    root_partition: int = 8  # s4 = SystemB
-    data_partition: int = 5  # s5 = DataB
+    root_partition: int = 8  # SystemB, Recovery role
 
     # Boot args
     boot_args: str = (
@@ -112,25 +111,10 @@ def preflight_checks(config: InstallConfig) -> bool:
 
 
 def create_apfs_volumes(config: InstallConfig, ssh_host: str = None) -> bool:
-    """
-    Create APFS volumes SystemB (s4) and DataB (s5).
-
-    This requires the SSH ramdisk to be active.
-    """
-    print("\n" + "=" * 60)
-    print("Creating APFS Volumes")
-    print("=" * 60)
-
-    # Check if we have ssh access
-    # For now, this is a placeholder - full implementation would use ramdisk SSH
-    print("[i] APFS volume creation requires ramdisk SSH access")
-    print("[i] To create volumes manually:")
-    print(f"    ssh root@<device_ip> '/sbin/newfs_apfs -A -v SystemB /dev/disk0s1'")
-    print(f"    ssh root@<device_ip> '/sbin/newfs_apfs -A -v DataB -P /dev/disk0s1'")
-
-    # The ramdisk stage.sh has the full implementation
-    # See: n61-patcher-master/lib/apfs.sh and stage.sh
-    print("[!] Skipping - use n61.sh volumes or run from ramdisk SSH")
+    """Describe the shell storage stage used by the N69 target."""
+    print(f"SystemB uses s{config.root_partition} with the Recovery role (0x04).")
+    print("The shell installer shares the existing iOS 15 Data volume.")
+    print("This preview does not create volumes.")
     return True
 
 
@@ -177,27 +161,9 @@ def stream_rootfs(config: InstallConfig, ipSW_path: Path, target_ip: str) -> boo
 
 
 def apply_rootfs_patches(config: InstallConfig) -> bool:
-    """
-    Apply post-rootfs patches:
-    - Copy keybags for encrypted DataB
-    - Replace fsck/apfs.fs with iOS 14 versions
-    - Install SEP firmware
-    - Set APFS roles
-    """
-    print("\n" + "=" * 60)
-    print("Applying RootFS Patches")
-    print("=" * 60)
-
-    print("[i] The following patches are applied by 'patch-rootfs':")
-    print("    - rootfs.finish: Copy var, create xarts/preboot, replace fsck")
-    print("    - rootfs.set_roles: Set SystemB=0x1, DataB=0x40")
-    print("    - rootfs.health: Health library cache (if enabled)")
-    print("    - rootfs.ui_resources: Fix staged App icons")
-    print("    - rootfs.trust_cache: Add cdhashes")
-
-    # These are implemented in n61-patcher's lib/overlay.sh
-    print("[!] Use 'sudo ./n61.sh patch-rootfs' to apply these patches")
-
+    """Describe the shell rootfs stage."""
+    print("N69 rootfs feature group: core. See the shell selection for individual resources.")
+    print("Finalization preserves stock Data and its systembag, then assigns SystemB role 0x04.")
     return True
 
 

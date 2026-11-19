@@ -39,6 +39,65 @@ class EvidenceTests(unittest.TestCase):
                 self.assertEqual(set(d.IMAGE_NAMES), set(ctx["image_sha256"]))
                 self.assertIsNone(ctx["commit"])
 
+    def test_snapshot_separates_profile_manifest_and_last_host_rootfs_receipt(self):
+        registry = Path("n61-patcher-master/patches/registry_n69_ios16.tsv")
+        project = self.root / "n61-patcher-master"
+        (project / "patches").mkdir(parents=True)
+        (self.root / registry).write_bytes(registry.read_bytes())
+        receipt = project / "build/n69-ios16-latest/patches-install.txt"
+        receipt.parent.mkdir(parents=True)
+        row = "rootfs\toverlay\trootfs.n69_model_files\tcore\n"
+        receipt.write_text(row)
+        manifest = self.root / "boot.json"
+        for mode in d.MODES:
+            patches = list(d.BOOT_MODES[mode])
+            manifest.write_text(json.dumps({"kernelcache_mode": mode, "kernel_patches": patches}))
+            context = d.capture_context(self.root, self.root, mode, "standalone_snapshot", question="pmu")
+            report = d.write_evidence(self.root, False, None, None, context)
+            shared = d.public_evidence(report)["host_context"]
+            self.assertEqual(shared["kernel_patches"], patches)
+            self.assertEqual(shared["host_rootfs_selection"]["groups"], ["core"])
+            self.assertEqual(shared["host_rootfs_selection"]["resources"], ["rootfs.n69_model_files"])
+            self.assertEqual(shared["question"], "pmu")
+            self.assertIn("unassigned to this SE", d.summary(report))
+        receipt.write_text(row.replace("core", "PRIVATE"))
+        manifest.write_text('{"kernelcache_mode":"full"}')
+        legacy = d.capture_context(self.root, self.root, "full", "standalone_snapshot")
+        self.assertIsNone(legacy["kernel_patches"])
+        self.assertIsNone(legacy["host_rootfs_selection"])
+
+    def test_shell_dry_run_reports_actual_core_selection(self):
+        import subprocess
+
+        result = subprocess.run([str(cli.SCRIPT_DIR / "n61.sh"), "patch-rootfs", "--target", "n69-ios16",
+                                 "--features", "core", "--dry-run", "-y"], cwd=self.root,
+                                check=True, capture_output=True, text=True)
+        resources = [line.split()[0] for line in result.stdout.splitlines() if line.startswith("  rootfs.")]
+        self.assertEqual(resources, ["rootfs.base_stream", "rootfs.apticket", "rootfs.n69_model_files",
+                                     "rootfs.finish", "rootfs.set_roles"])
+
+    def test_live_donor_response_is_a_reference_only_for_matched_connected_capture(self):
+        ctx = {"attempt_id": "f26fbbdd-0000-431a-b000-123456789abc", "mode_check": "match",
+               "artifact_scope": "pre_send_snapshot", "requested_mode": "full", "manifest_kernelcache_mode": "full",
+               "snapshot_at_utc": "2020-01-01T10:00:00Z", "bootx_sent_at_utc": "2020-01-01T10:01:00Z",
+               "image_sha256": {name: "a" * 64 for name in d.IMAGE_NAMES}}
+        donor = "ProductType: iPhone8,4\nBuildVersion: 20H392\n"
+        for changed, info, matched, expected in [
+            ({}, donor, True, True), ({}, donor, False, False),
+            ({}, donor.replace("20H392", "19H422"), True, False),
+            ({"artifact_scope": "standalone_snapshot"}, donor, True, False),
+            ({"image_sha256": {}}, donor, True, False),
+            ({"mode_check": "mismatch"}, donor, True, False),
+            ({}, donor + "BuildVersion: 19H422\n", True, False),
+        ]:
+            with self.subTest(changed=changed, matched=matched, info=info):
+                report = d.write_evidence(self.root, True, info, matched, {**ctx, **changed})
+                self.assertEqual(bool(report["reference"]), expected)
+                self.assertEqual(bool(d.public_evidence(report)["reference"]), expected)
+                self.assertEqual(report["donor_kernel_entry"], "unproven")
+                if expected:
+                    self.assertEqual(report["reference"]["response_sha256"], hashlib.sha256(info.encode()).hexdigest())
+
     def test_ips_classification_never_assigns_an_attempt(self):
         first, last = "2026-11-19T08:00:00Z", "2026-11-19T08:05:00Z"
         for when, relation in [

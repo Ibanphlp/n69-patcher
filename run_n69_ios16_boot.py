@@ -21,6 +21,7 @@ from dataclasses import dataclass
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
+from ios16se.kc_patch import patches_for_mode
 from ios16se.build import (
     BuildConfig, load_config, build_all, build_kernelcache, selected_identity,
     boot_flow, validate_boot_images, verify_sep_for_device, BuildError
@@ -482,6 +483,7 @@ def main():
             "sep": "artifacts/boot/sep.img4",
             "kernelcache": str(kernel),
             "kernelcache_mode": config.boot_mode,
+            "kernel_patches": patches_for_mode(config.boot_mode, profile.kernelcache_patches),
             "soc_model": identity.model,
             "soc_cpid": identity.cpid_text,
             "donor_board": identity.donor_board,

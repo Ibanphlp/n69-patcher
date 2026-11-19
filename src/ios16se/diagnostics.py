@@ -13,10 +13,19 @@ from pathlib import Path
 from uuid import uuid4
 from tempfile import mkdtemp
 
+from .kc_patch import BOOT_MODES, DISABLED_HARDWARE
 from .firmware import IPAD5_16_7_16, TARGET_15_8_8
 
 SCHEMA_VERSION = 2
 MODES = ("minimal", "safe-minimal", "full")
+QUESTIONS = {
+    "donor-entry": "Did this SE respond with donor build 20H392 during this attempt?",
+    "display": "Was a donor-system image observed on this SE during this attempt?",
+    "pmu": "Was a D2255 PMU probe observed in a trace from this SE?",
+    "sep": "Was a SEP service response observed in the donor system?",
+    "display-power": "Was display power initialization observed on this SE?",
+    "touch": "Was a touch event observed in the donor system during this attempt?",
+}
 IMAGE_NAMES = {
     "iBSS": "boot_iBSS.img4", "iBEC": "boot_iBEC.img4", "DeviceTree": "boot_DT.img4",
     "TrustCache": "boot_TC.img4", "SEP": "sep.img4", "KernelCache": "boot_KC.img4",
@@ -44,7 +53,34 @@ def new_directory(logs, prefix):
     return Path(mkdtemp(prefix=prefix, dir=logs))
 
 
-def capture_context(root, image_dir, mode, scope, images=None):
+def manifest_patches(manifest):
+    patches = manifest.get("kernel_patches")
+    mode = manifest.get("kernelcache_mode")
+    allowed = BOOT_MODES.get(mode, ()) if isinstance(mode, str) else ()
+    if not isinstance(patches, list) or not patches or any(p not in allowed for p in patches):
+        return None
+    return patches
+
+
+def rootfs_selection(root):
+    """Snapshot the last selection saved on this host, without attributing it to a phone."""
+    project = root / "n61-patcher-master"
+    receipt = project / "build/n69-ios16-latest/patches-install.txt"
+    try:
+        registry = (project / "patches/registry_n69_ios16.tsv").read_text().splitlines()
+        known = {tuple(line.split("\t")[:4]) for line in registry if line.startswith("rootfs\t")}
+        raw = receipt.read_bytes()
+        selected = [tuple(line.split("\t")) for line in raw.decode().splitlines()
+                    if line.startswith("rootfs\t")]
+    except (OSError, UnicodeError):
+        return None
+    if not selected or any(row not in known for row in selected):
+        return None
+    return {"groups": sorted({row[3] for row in selected}), "resources": [row[2] for row in selected],
+            "receipt_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def capture_context(root, image_dir, mode, scope, images=None, *, question="donor-entry"):
     try:
         manifest = json.loads((image_dir / "boot.json").read_text(encoding="utf-8"))
         if not isinstance(manifest, dict):
@@ -78,6 +114,8 @@ def capture_context(root, image_dir, mode, scope, images=None):
             hashes[key] = None
     return {
         "attempt_id": str(uuid4()), "snapshot_at_utc": utc_now(), "artifact_scope": scope,
+        "kernel_patches": manifest_patches(manifest),
+        "question": question, "host_rootfs_selection": rootfs_selection(root),
         "requested_mode": mode, "manifest_kernelcache_mode": built_mode, "mode_check": status,
         "manifest_target": manifest.get("target"), "commit": commit, "image_sha256": hashes,
         "expected_builds": {"stock": TARGET_15_8_8.build, "donor": IPAD5_16_7_16.build},
@@ -177,10 +215,38 @@ def write_evidence(out_dir, connected, info, matched, host_context, *, collected
         "device_observation": {**fields, "matches_pre_boot_ecid": matched} if fields else None,
         "stored_reports": reports,
     }
+    evidence["reference"] = live_reference(evidence, info)
     pending = out_dir / ".evidence.tmp"
     pending.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
     pending.replace(out_dir / "evidence.json")
     return evidence
+
+
+def live_reference(evidence, info):
+    """Keep a private regression reference only for a live, identified donor OS response."""
+    context = evidence.get("host_context") or {}
+    device = evidence.get("device_observation") or {}
+    if (not info or evidence.get("capture_status") != "complete"
+            or device.get("matches_pre_boot_ecid") is not True
+            or context.get("artifact_scope") != "pre_send_snapshot"
+            or context.get("mode_check") != "match"
+            or context.get("manifest_kernelcache_mode") not in MODES
+            or context.get("requested_mode") != context.get("manifest_kernelcache_mode")):
+        return None
+    lines = info.splitlines()
+    for key, value in (("ProductType", "iPhone8,4"), ("BuildVersion", IPAD5_16_7_16.build)):
+        values = [line.partition(": ")[2] for line in lines if line.startswith(key + ": ")]
+        if values != [value] or device.get(key) != value:
+            return None
+    snapshot, sent, completed = (timestamp(t) for t in (context.get("snapshot_at_utc"),
+                                 context.get("bootx_sent_at_utc"), evidence.get("completed_at_utc")))
+    if None in (snapshot, sent, completed) or not snapshot <= sent <= completed:
+        return None
+    hashes = context.get("image_sha256") or {}
+    if any(not re.fullmatch("[0-9a-f]{64}", hashes.get(key) or "") for key in IMAGE_NAMES):
+        return None
+    return {"observation": "live_donor_os_response", "springboard": "unobserved",
+            "source": "device-info-after.txt", "response_sha256": hashlib.sha256(info.encode()).hexdigest()}
 
 
 def load_capture(directory):
@@ -208,7 +274,16 @@ def summary(report):
         observed = "no OS identity recorded"
     last_host = ("bootx command returned at " + context["bootx_sent_at_utc"]
                  if context.get("bootx_sent_at_utc") else "no handoff timestamp recorded")
+    selection = context.get("host_rootfs_selection") or {}
+    resources = ", ".join(selection.get("resources") or []) or "unknown"
+    question = QUESTIONS.get(context.get("question"), "unknown (legacy)")
     return "\n".join([
+        "Trial question: " + question,
+        "Manifest kernel patches: " + ", ".join(context.get("kernel_patches") or ["unknown"]),
+        "Disabled in all three presets: " + ", ".join(DISABLED_HARDWARE),
+        "Structural checks on these specific images: unknown. Hardware initialization: unobserved.",
+        "Last host rootfs feature groups: " + ", ".join(selection.get("groups") or ["unknown"]),
+        "Last host rootfs selection (unassigned to this SE): " + resources,
         "Capture: " + (report.get("attempt_id") or "unknown (legacy)"),
         "Capture status: " + report.get("capture_status", "unknown (legacy)"),
         describe_modes(context),
@@ -216,7 +291,8 @@ def summary(report):
         "Host handoff: " + last_host,
         "Host capture completed: " + (report.get("completed_at_utc") or "unknown"),
         "SSH probe replied: " + str(report.get("ssh_connected")),
-        ("First unconfirmed boot stage: donor kernel entry on this SE" if context.get("bootx_sent_at_utc")
+        ("Matched live donor OS response. Running kernel identity and SpringBoard remain unverified." if report.get("reference")
+         else "First unconfirmed boot stage: donor kernel entry on this SE" if context.get("bootx_sent_at_utc")
          else "First unconfirmed handoff: host bootx return unknown; donor kernel entry unproven"),
         f"Stored reports awaiting attribution: {len(report['stored_reports'])}",
     ])
@@ -246,6 +322,9 @@ def public_evidence(report):
     context = report.get("host_context") or {}
     device = report.get("device_observation") or {}
     safe_context = {
+        "kernel_patches": manifest_patches({"kernel_patches": context.get("kernel_patches"),
+                                            "kernelcache_mode": context.get("manifest_kernelcache_mode")}),
+        "question": context.get("question") if context.get("question") in QUESTIONS else None,
         "requested_mode": token(context.get("requested_mode"), "|".join(MODES)),
         "manifest_kernelcache_mode": token(context.get("manifest_kernelcache_mode"), "|".join(MODES)),
         "mode_check": token(context.get("mode_check"), "match|mismatch|unavailable|invalid_mode|requested_mode_unknown"),
@@ -257,8 +336,25 @@ def public_evidence(report):
                          for key in IMAGE_NAMES},
         "expected_builds": {k: token((context.get("expected_builds") or {}).get(k), BUILD) for k in ("stock", "donor")},
     }
+    selection = context.get("host_rootfs_selection")
+    if isinstance(selection, dict):
+        registry = Path(__file__).resolve().parents[2] / "n61-patcher-master/patches/registry_n69_ios16.tsv"
+        known = {row[2]: row[3] for line in registry.read_text().splitlines()
+                 if line.startswith("rootfs\t") for row in [line.split("\t")]}
+        ids = selection.get("resources")
+        if isinstance(ids, list) and ids and all(isinstance(key, str) and key in known for key in ids):
+            safe_context["host_rootfs_selection"] = {
+                "resources": ids, "groups": sorted({known[key] for key in ids}),
+                "receipt_sha256": token(selection.get("receipt_sha256"), "[a-f0-9]{64}"),
+            }
     matched = device.get("matches_pre_boot_ecid")
+    reference = report.get("reference") or {}
+    live = (reference.get("observation") == "live_donor_os_response"
+            and matched is True and device.get("BuildVersion") == IPAD5_16_7_16.build
+            and device.get("ProductType") == "iPhone8,4")
     return {
+        "reference": {"observation": "live_donor_os_response", "springboard": "unobserved",
+                      "response_sha256": token(reference.get("response_sha256"), "[a-f0-9]{64}")} if live else None,
         "schema_version": SCHEMA_VERSION,
         "attempt_id": token(report.get("attempt_id"), "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"),
         "completed_at_utc": instant(report.get("completed_at_utc")),

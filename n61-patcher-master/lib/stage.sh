@@ -13,7 +13,7 @@ data_is_encrypted() { [ "${T_DATA_PROTECTION:-}" = "encrypted" ]; }
 # 选挂清单文件：dry-run 用临时文件，避免"只演练却写工作目录"
 patch_selection_file() {
     if dry; then
-        mktemp -t n61-patches || die "无法创建临时清单文件"
+        mktemp "${TMPDIR:-/tmp}/n61-patches.XXXXXX" || die "无法创建临时清单文件"
     else
         printf '%s\n' "$WK/patches-selected.txt"
     fi
@@ -253,13 +253,24 @@ stage_extract_im4m() {
 # ---------- volumes ----------
 stage_volumes() {
     local encrypt=0 state=0 data_name
+    if [ "$T_NAME" = "n69-ios16" ]; then
+        [ "${OPT_RECREATE_DATA:-0}" -eq 0 ] && ! data_is_encrypted ||
+            die "N69 shares stock Data. DataB recreation and encryption are unsupported."
+        if dry; then log "N69 volumes: SystemB only, existing Data is shared."; return 0; fi
+        ssh_ensure
+        apfs_volumes
+        guard_n69_shared_layout
+        if ! apfs_vol_exists "$T_MNT_SYSTEM_B"; then
+            apfs_create_volumes "$T_VOL_CREATE" 0 || die "SystemB creation failed."
+            apfs_cleanup
+        fi
+        guard_target_volumes system
+        return
+    fi
     data_name="$(printf '%s' "${T_VOL_CREATE:-DataB}" | awk '{print $2}')"
     [ -n "$data_name" ] || data_name="DataB"
     if dry; then log "dry-run：跳过创建卷。"; return 0; fi
     ssh_ensure
-    if [ "$T_NAME" = "n69-ios16" ]; then
-        guard_n69_recovery_role || return 1
-    fi
     if apfs_vol_exists "$T_MNT_SYSTEM_B"; then
         guard_target_volumes system
     fi
@@ -306,9 +317,6 @@ stage_rootfs() {
     require_root rootfs
     preflight_install_inputs
     ssh_ensure
-    if [ "$T_NAME" = "n69-ios16" ]; then
-        guard_n69_recovery_role || return 1
-    fi
     # donor_mount 负责 owners 模式、复用已挂载点、校验 rootfs build 号（17H35）；
     # 卸载交给 EXIT trap（donor_umount_all），避免失败/中断时留下挂载。
     mnt="$(donor_mount j96)" || die "rootfs DMG 挂载失败"
@@ -354,6 +362,10 @@ stage_patch_rootfs() {
     [ "$expected" -gt 0 ] ||
         { rm -f "$list"; die "选挂里没有 rootfs overlay/finalize 补丁（检查 --features/--exclude）"; }
 
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        log "Rootfs feature groups: ${OPT_FEATURES:-none}. Selected resources:"
+        awk -F'	' '$1 == "rootfs" { print "  " $3 " (" $2 ")" }' "$list"
+    fi
     if dry; then
         # 用 fd 3 读清单：循环体里的命令（尤其 ssh）会继承 stdin，
         # 如果清单在 stdin 上，远端命令会把剩余行吃掉，导致只跑前几个补丁。
@@ -407,7 +419,8 @@ stage_patch_rootfs() {
 
     # 记录安装时的选挂，供 build 对比（避免构建组件与已安装 rootfs 不一致却无提示）
     selection_ids "$list" >"$WK/install-selection.txt"
-    cp "$list" "$WK/patches-install.txt" 2>/dev/null || true
+    cp "$list" "$WK/patches-install.tmp" && mv "$WK/patches-install.tmp" "$WK/patches-install.txt" ||
+        die "Could not save the selected rootfs resources."
     ok "rootfs 补丁完成，共 ${ran} 个（跳过 manual ${skipped} 个，共 ${expected} 个）。"
     return 0
 }
@@ -418,6 +431,7 @@ stage_patch_rootfs() {
 # 这里只替换这些 App 的图标资源 + 清 SpringBoard 图标缓存，不动用户数据。
 stage_fix_icons() {
     local donor j96 list tmp n
+    [ "$T_NAME" != "n69-ios16" ] || die "fix-icons requires a separate DataB."
     if dry; then log "dry-run：跳过图标修复。"; return 0; fi
     ssh_ensure
     donor="$(donor_mount "$T_UI_DONOR")" || die "挂载 UI donor 失败: $T_UI_DONOR"

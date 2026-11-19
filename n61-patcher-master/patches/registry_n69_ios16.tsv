@@ -11,11 +11,11 @@ kc	transform	kc.wifi_bcm	wifi	device	kc.remove_ipad_drivers		0	BCM Wi-Fi firmwar
 kc	transform	kc.vibration	vibration	device	kc.remove_ipad_drivers		0	DRV2604 haptic driver
 kc	transform	kc.watchtower	core	version	kc.sep_legacy		0	Watchtower tail
 kc	transform	kc.complzss_repack	core	version	kc.watchtower		0	Recompress kernelcache
-rootfs	stream	rootfs.base_stream	core	version			0	iPad 5 16.7.16 rootfs stream to s4
+rootfs	stream	rootfs.base_stream	core	version			0	iPad 5 16.7.16 rootfs stream to SystemB (s8)
 rootfs	overlay	rootfs.apticket	core	device	rootfs.base_stream		0	IM4M for mobileactivationd
 rootfs	overlay	rootfs.b1_firmware	wifi	device	rootfs.base_stream		0	Wi-Fi/BT firmware from SystemA
 rootfs	overlay	rootfs.baseband_compatibility	baseband	version	rootfs.base_stream		0	CommCenter config for SE
 rootfs	overlay	rootfs.factorydata	baseband	device	rootfs.base_stream		0	Factory data from SystemA
 rootfs	overlay	rootfs.n69_model_files	core	device	rootfs.base_stream		0	N69AP model files
-rootfs	finalize	rootfs.finish	core	version	rootfs.base_stream		0	var→DataB, fsck, SEP, keybags
-rootfs	finalize	rootfs.set_roles	core	device	rootfs.finish		0	Set SystemB=0x1, DataB=0x40
+rootfs	finalize	rootfs.finish	core	version	rootfs.base_stream		0	Shared stock Data, preserve systembag and copy stock SEP
+rootfs	finalize	rootfs.set_roles	core	device	rootfs.finish		0	Set SystemB (s8) to Recovery (0x04), preserve stock roles

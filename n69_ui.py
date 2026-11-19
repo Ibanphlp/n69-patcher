@@ -82,7 +82,7 @@ ACTIONS: tuple[Action, ...] = (
     Action("ramdisk", "Start ramdisk", "DFU to the SSH ramdisk. SEP stays off unless the switch is on.", "Device"),
     Action("capture", "Capture SEP", "Copy this phone's Preboot SEP and IM4M. Ramdisk, SEP off.", "Device"),
     Action("status", "Volume status", "List APFS roles over the ramdisk.", "Device"),
-    Action("volumes", "Create volumes", "Keep SystemB/DataB. Data protection stays none.", "Install"),
+    Action("volumes", "Create volumes", "Prepare SystemB in s8. Share existing iOS 15 Data.", "Install"),
     Action("rootfs", "Stream rootfs", "About 25 minutes. Do not sleep the Mac.", "Install", sudo=True),
     Action("cryptex", "Install cryptex", "Dyld cache and Preboot link.", "Install", sudo=True),
     Action("patch", "Patch rootfs", "Shared-Data finish, then mark s8 Recovery.", "Install", sudo=True,
@@ -96,7 +96,7 @@ ACTIONS: tuple[Action, ...] = (
 )
 
 
-def command_for(action: Action, *, mode: str, board: str, sep: bool, dry_run: bool, recreate_data: bool) -> tuple[list[str], dict[str, str]]:
+def command_for(action: Action, *, mode: str, board: str, sep: bool, dry_run: bool) -> tuple[list[str], dict[str, str]]:
     """Return argv and extra environment for one UI action."""
 
     n61 = [str(ROOT / "n61.sh"), "--target", "n69-ios16", "-y"]
@@ -117,10 +117,7 @@ def command_for(action: Action, *, mode: str, board: str, sep: bool, dry_run: bo
     if action.key == "status":
         return [*n61, "status"], env
     if action.key == "volumes":
-        cmd = [*n61, "volumes", "--data-protection", "none"]
-        if recreate_data:
-            cmd.append("--recreate-data")
-        return cmd, env
+        return [*n61, "volumes", "--data-protection", "none"], env
     if action.key == "rootfs":
         return [*n61, "rootfs"], env
     if action.key == "cryptex":
@@ -303,7 +300,7 @@ def main() -> int:
     def launch(action: Action, board_name: str) -> int:
         argv, extra = command_for(
             action, mode=mode.get(), board=board_name,
-            sep=bool(sep.get()), dry_run=False, recreate_data=False,
+            sep=bool(sep.get()), dry_run=False,
         )
         if action.sudo:
             argv = ["sudo", "-S", "-p", "", *argv]

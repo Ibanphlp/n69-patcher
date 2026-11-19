@@ -4,6 +4,8 @@
 
 **Le dernier état rapporté sur le SE est le retour sous iOS 15.** Le projet vérifie plusieurs propriétés des images construites sur ordinateur. La première étape décisive encore sans observation attribuable est l’entrée dans le noyau iPadOS 16.7.16. Sur iPhone 7, l’auteur de SevenUP rapporte SpringBoard et SSH sous iOS 16.1. [SHEET][SHEET] · [OBS][OBS]
 
+Cet audit décrit la révision citée dans les sources. Les corrections ultérieures du stockage, des diagnostics et du paquet figurent dans le [bilan actuel](FINAL_AUDIT_TABLE.md).
+
 ## Constats prioritaires
 
 | Sujet | Constat | Vérification ou correction | Détail |

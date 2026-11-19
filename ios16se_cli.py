@@ -257,7 +257,7 @@ def boot_device(args, capture_logs: bool = False):
     """Execute full boot sequence."""
     if capture_logs:
         out_dir = diagnostics.new_directory(LOGS_DIR, "kernel-")
-        initial = write_evidence(out_dir, None, None, None, {"requested_mode": args.mode}, complete=False)
+        initial = write_evidence(out_dir, None, None, None, {"requested_mode": args.mode, "question": getattr(args, "question", "donor-entry")}, complete=False)
         record_event(out_dir, "capture requested before build")
         say(f"Capture {initial['attempt_id']}: {out_dir}")
     build_images(args.mode, args.im4m)
@@ -275,7 +275,8 @@ def boot_device(args, capture_logs: bool = False):
             sys.exit(1)
 
     if capture_logs:
-        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "pre_send_snapshot", images)
+        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "pre_send_snapshot", images,
+                                              question=getattr(args, "question", "donor-entry"))
         context["attempt_id"] = initial["attempt_id"]
         write_evidence(out_dir, None, None, None, context, complete=False)
         say(diagnostics.describe_modes(context), "info")
@@ -673,6 +674,9 @@ Examples:
 
     logs_parser.add_argument("--mode", choices=diagnostics.MODES,
                              help="Operator-selected mode; records a standalone artifact snapshot")
+    for capture_parser in (boot_cap, logs_parser):
+        capture_parser.add_argument("--question", choices=diagnostics.QUESTIONS, default="donor-entry",
+                                    help="Single observation to seek during this attempt")
     summary_cmd = sub.add_parser("summary", help="Read a saved capture")
     summary_cmd.add_argument("capture", type=Path)
     compare = sub.add_parser("compare", help="Compare two saved captures in the given order")
@@ -702,7 +706,8 @@ Examples:
     elif args.command == "boot-capture":
         return boot_device(args, capture_logs=True)
     elif args.command == "logs":
-        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "standalone_snapshot")
+        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "standalone_snapshot",
+                                              question=args.question)
         say(diagnostics.describe_modes(context), "info")
         capture_logs(wait=args.wait, port=args.port, host_context=context)
     elif args.command == "coverage":

@@ -6,10 +6,14 @@ framebuffer, and launchd. A green host test is not that log.
 
 ## Overview
 
-This pipeline boots iOS 16 on N69AP (iPhone SE 1st Gen, A9) by:
+The experimental pipeline prepares iOS 16 for N69AP (iPhone SE 1st Gen, A9) by:
 1. Using the SE's own iOS 15.8.8 kernelcache for hardware drivers
 2. Porting those drivers into the iPad 5 iOS 16 kernelbase via SevenUP's footprint-displacement engine
 3. Building a complete boot chain with IM4M-signed images
+
+## N69 storage layout
+
+SystemB is s8 with final APFS role Recovery (0x04). The donor system is configured to share the iOS 15 Data volume (0x40) and its systembag. A legacy unroled DataB in s9 can remain in place. The N69 installer creates only SystemB and refuses an ambiguous Data or Recovery role. Donor userland can change shared data if it starts.
 
 ## Boot Sequence
 
