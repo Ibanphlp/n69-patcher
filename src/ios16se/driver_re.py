@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 import struct
 
-from .prelink import inspect_bytes, extract_driver, metadata, bundle_ids_from_prelink
+from .prelink import driver_records, extract_driver, PrelinkError
 from .macho import inspect_bytes as inspect_macho_bytes, Segment as MachOSegment
 
 
@@ -20,8 +20,8 @@ from .macho import inspect_bytes as inspect_macho_bytes, Segment as MachOSegment
 class DriverInfo:
     """Complete information about a prelinked driver."""
     bundle_id: str
-    load_addr: int
-    size: int
+    load_addr: int | None
+    size: int | None
     dependencies: list[str]
     segment: Optional[MachOSegment] = None
     extracted_path: Optional[Path] = None
@@ -57,45 +57,32 @@ class DriverRE:
         if self._prelink_data is None:
             self.load_kernel()
 
-        inventory = bundle_ids_from_prelink(self._prelink_data)
-        drivers = []
-
-        for bundle_id in inventory.bundle_identifiers:
-            try:
-                meta = metadata(self.kernel_path, bundle_id)
-                drivers.append(DriverInfo(
-                    bundle_id=bundle_id,
-                    load_addr=meta.executable_load_address,
-                    size=meta.executable_size,
-                    dependencies=list(meta.dependencies),
-                ))
-            except Exception as e:
-                print(f"  Warning: Failed to get metadata for {bundle_id}: {e}")
-
-        return drivers
+        return [
+            DriverInfo(name, record.executable_load_address, record.executable_size, list(record.dependencies))
+            for name, record in sorted(driver_records(self._prelink_data).items())
+        ]
 
     def extract_driver(self, bundle_id: str) -> Path:
         """Extract a driver Mach-O to work directory."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", bundle_id):
+            raise PrelinkError("invalid driver bundle identifier")
         output = self.work_dir / f"{bundle_id}.kext"
-        if output.exists():
-            import shutil
-            shutil.rmtree(output)
-        output.mkdir(parents=True)
+        if output.is_symlink():
+            raise PrelinkError("driver output directory is a symbolic link")
+        output.mkdir(parents=True, exist_ok=True)
 
         macho_path = output / f"{bundle_id}.raw"
+        if macho_path.is_symlink():
+            raise PrelinkError("driver output is a symbolic link")
         extract_driver(self.kernel_path, bundle_id, macho_path)
-
-        driver = next((d for d in self.list_drivers() if d.bundle_id == bundle_id), None)
-        if driver:
-            driver.extracted_path = macho_path
 
         return macho_path
 
     def extract_all_drivers(self) -> list[DriverInfo]:
         """Extract all drivers to work directory."""
-        drivers = self.list_drivers()
+        drivers = [driver for driver in self.list_drivers() if driver.size is not None]
         for d in drivers:
-            self.extract_driver(d.bundle_id)
+            d.extracted_path = self.extract_driver(d.bundle_id)
         return drivers
 
     def find_driver_in_prelink(self, bundle_id: str) -> Optional[dict]:
@@ -103,31 +90,18 @@ class DriverRE:
         if self._prelink_data is None:
             self.load_kernel()
 
-        needle = f"<key>CFBundleIdentifier</key><string>{bundle_id}</string>".encode()
-        for match in re.finditer(re.escape(needle), self._prelink_data):
-            start = max(0, match.start() - 8192)
-            end = match.end() + 16384
-            record = self._prelink_data[start:end]
-
-            # Parse key fields
-            result = {"bundle_id": bundle_id, "xml_offset": match.start()}
-
-            for key, pattern in [
-                ("_PrelinkExecutableLoadAddr", rb"<key>_PrelinkExecutableLoadAddr</key><integer[^>]*>(0x[0-9a-fA-F]+)</integer>"),
-                ("_PrelinkExecutableSize", rb"<key>_PrelinkExecutableSize</key><integer[^>]*>(0x[0-9a-fA-F]+)</integer>"),
-                ("OSBundleLibraries", rb"<key>OSBundleLibraries</key><dict>(.*?)</dict>"),
-            ]:
-                m = re.search(pattern, record, re.DOTALL)
-                if m:
-                    if key == "OSBundleLibraries":
-                        libs = re.findall(rb"<key>([^<]+)</key><string>", m.group(1))
-                        result[key] = [l.decode() for l in libs]
-                    else:
-                        result[key] = int(m.group(1), 16)
-
-            return result
-
-        return None
+        record = driver_records(self._prelink_data).get(bundle_id)
+        if record is None:
+            return None
+        literal = f"<key>CFBundleIdentifier</key><string>{bundle_id}</string>".encode()
+        offset = self._prelink_data.find(literal)
+        result = {"bundle_id": bundle_id, "OSBundleLibraries": list(record.dependencies)}
+        if offset >= 0 and self._prelink_data.count(literal) == 1:
+            result["xml_offset"] = offset
+        if record.executable_size is not None:
+            result["_PrelinkExecutableLoadAddr"] = record.executable_load_address
+            result["_PrelinkExecutableSize"] = record.executable_size
+        return result
 
     def diff_drivers(self, other_kernel: Path, bundle_id: str) -> dict:
         """Compare a driver between two kernels."""
@@ -235,7 +209,8 @@ if __name__ == "__main__":
     if "--list" in sys.argv:
         drivers = re_tool.list_drivers()
         for d in drivers:
-            print(f"  {d.bundle_id}: addr=0x{d.load_addr:x} size=0x{d.size:x} deps={len(d.dependencies)}")
+            extent = "no executable" if d.size is None else f"addr=0x{d.load_addr:x} size=0x{d.size:x}"
+            print(f"  {d.bundle_id}: {extent} deps={len(d.dependencies)}")
 
     if "--extract-all" in sys.argv:
         drivers = re_tool.extract_all_drivers()

@@ -21,7 +21,7 @@ from .prelink import (
     delta as driver_delta,
     extract_driver,
     inspect as inspect_drivers,
-    metadata as driver_metadata,
+    inspect_record,
 )
 from .pongo import PongoError, boot_raw as pongo_boot_raw, load_xnu as pongo_load_xnu
 from .session import PongoSessionError, start_palera1n_pongo, start_pongo
@@ -156,11 +156,15 @@ def _inspect_drivers(path: str) -> int:
 
 
 def _inspect_driver(path: str, bundle_identifier: str) -> int:
-    info = driver_metadata(path, bundle_identifier)
-    print(f"Pilote : {info.bundle_identifier}")
-    print(f"Adresse préliée : 0x{info.executable_load_address:x}")
-    print(f"Taille exécutable : 0x{info.executable_size:x}")
+    info = inspect_record(path, bundle_identifier)
+    print(f"Pilote : {bundle_identifier}")
+    if info.executable_size is None:
+        print("Aucun exécutable déclaré")
+    else:
+        print(f"Adresse préliée : 0x{info.executable_load_address:x}")
+        print(f"Taille exécutable : 0x{info.executable_size:x}")
     print("Dépendances : " + ", ".join(info.dependencies))
+    print("Personnalités IOKit : " + ", ".join(info.personalities))
     return 0
 
 

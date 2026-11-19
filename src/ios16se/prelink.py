@@ -5,15 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from xml.etree import ElementTree as ET
 
 from .macho import MachOError, inspect_bytes as inspect_macho_bytes
 
 
 class PrelinkError(ValueError):
     """A Mach-O kernelcache has no usable prelink metadata segment."""
-
-
-_IDENTIFIER = re.compile(rb"<key>CFBundleIdentifier</key><string>([^<]+)</string>")
 
 
 @dataclass(frozen=True)
@@ -29,16 +27,95 @@ class DriverMetadata:
     dependencies: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DriverRecord:
+    executable_load_address: int | None
+    executable_size: int | None
+    dependencies: tuple[str, ...]
+    personalities: tuple[str, ...]
+
+
+def driver_records(data: bytes) -> dict[str, DriverRecord]:
+    """Read the direct kext dictionaries. IDREFs can point outside their record."""
+    try:
+        root = ET.fromstring(data.rstrip(b"\0"))
+    except ET.ParseError as error:
+        raise PrelinkError(f"XML de préliaison invalide : {error}") from error
+    ids = {}
+    for node in root.iter():
+        if "ID" in node.attrib:
+            identifier = node.attrib["ID"]
+            if identifier in ids:
+                raise PrelinkError(f"ID XML dupliqué : {identifier}")
+            ids[identifier] = node
+
+    def resolve(node):
+        seen = set()
+        while "IDREF" in node.attrib:
+            target = node.attrib["IDREF"]
+            if target in seen or target not in ids:
+                raise PrelinkError(f"IDREF invalide : {target}")
+            seen.add(target)
+            node = ids[target]
+        return node
+
+    def fields(node):
+        node = resolve(node)
+        if node.tag != "dict" or len(node) % 2:
+            raise PrelinkError("dictionnaire de préliaison invalide")
+        result = {}
+        for key, value in zip(node[::2], node[1::2]):
+            key = resolve(key)
+            if key.tag != "key" or not key.text or key.text in result:
+                raise PrelinkError("clé de préliaison invalide ou dupliquée")
+            result[key.text] = value
+        return result
+
+    def integer(node):
+        node = resolve(node)
+        try:
+            value = int(node.text or "", 0)
+        except ValueError as error:
+            raise PrelinkError("entier de préliaison invalide") from error
+        if node.tag != "integer" or value < 0:
+            raise PrelinkError("entier de préliaison invalide")
+        return value
+
+    if root.tag == "plist" and len(root) == 1:
+        root = root[0]
+    entries = fields(root).get("_PrelinkInfoDictionary")
+    if entries is None or resolve(entries).tag != "array":
+        raise PrelinkError("tableau _PrelinkInfoDictionary absent")
+    records = {}
+    for entry in resolve(entries):
+        record = fields(entry)
+        if "CFBundleIdentifier" not in record:
+            raise PrelinkError("CFBundleIdentifier absent")
+        name = resolve(record["CFBundleIdentifier"])
+        if name.tag != "string" or not name.text or name.text in records:
+            raise PrelinkError(f"CFBundleIdentifier invalide ou dupliqué : {name.text}")
+        addr = record.get("_PrelinkExecutableLoadAddr")
+        size = record.get("_PrelinkExecutableSize")
+        if (addr is None) != (size is None):
+            raise PrelinkError(f"plage exécutable incomplète pour {name.text}")
+        records[name.text] = DriverRecord(
+            integer(addr) if addr is not None else None,
+            integer(size) if size is not None else None,
+            tuple(sorted(fields(record["OSBundleLibraries"]))) if "OSBundleLibraries" in record else (),
+            tuple(sorted(fields(record["IOKitPersonalities"]))) if "IOKitPersonalities" in record else (),
+        )
+    if not records:
+        raise PrelinkError("aucun identifiant de pilote dans les métadonnées préliées")
+    return records
+
+
 def bundle_ids_from_prelink(data: bytes) -> DriverInventory:
     """Read unique bundle identifiers from an XML prelink data region."""
 
-    identifiers = tuple(sorted({item.decode("utf-8", "replace") for item in _IDENTIFIER.findall(data)}))
-    if not identifiers:
-        raise PrelinkError("aucun identifiant de pilote dans les métadonnées préliées")
-    return DriverInventory(identifiers)
+    return DriverInventory(tuple(sorted(driver_records(data))))
 
 
-def inspect_bytes(data: bytes) -> DriverInventory:
+def _prelink_region(data: bytes) -> bytes:
     """Locate ``__PRELINK_INFO`` in a validated 64-bit kernelcache Mach-O."""
 
     try:
@@ -47,8 +124,20 @@ def inspect_bytes(data: bytes) -> DriverInventory:
         raise PrelinkError(str(error)) from error
     for segment in macho.segments:
         if segment.name == "__PRELINK_INFO":
-            return bundle_ids_from_prelink(data[segment.fileoff : segment.fileoff + segment.filesize])
+            return data[segment.fileoff : segment.fileoff + segment.filesize]
     raise PrelinkError("segment __PRELINK_INFO absent")
+
+
+def inspect_bytes(data: bytes) -> DriverInventory:
+    return bundle_ids_from_prelink(_prelink_region(data))
+
+
+def inspect_record(path: str | Path, bundle_identifier: str) -> DriverRecord:
+    records = driver_records(_prelink_region(Path(path).read_bytes()))
+    try:
+        return records[bundle_identifier]
+    except KeyError as error:
+        raise PrelinkError(f"pilote introuvable : {bundle_identifier}") from error
 
 
 def inspect(path: str | Path) -> DriverInventory:
@@ -91,7 +180,14 @@ def metadata(path: str | Path, bundle_identifier: str) -> DriverMetadata:
 def extract_driver(path: str | Path, bundle_identifier: str, output: str | Path) -> Path:
     """Extract one prelinked kext Mach-O without modifying its source cache."""
     source = Path(path)
+    record = inspect_record(source, bundle_identifier)
+    if record.executable_size is None:
+        raise PrelinkError(f"aucun exécutable déclaré pour {bundle_identifier}")
     info = metadata(source, bundle_identifier)
+    if (info.executable_load_address, info.executable_size) != (
+        record.executable_load_address, record.executable_size
+    ) or info.dependencies != record.dependencies:
+        raise PrelinkError(f"les métadonnées d'extraction ne correspondent pas à la fiche de {bundle_identifier}")
     macho = inspect_macho_bytes(source.read_bytes())
     segment = next(
         (
@@ -106,6 +202,8 @@ def extract_driver(path: str | Path, bundle_identifier: str, output: str | Path)
         raise PrelinkError(f"plage exécutable non extraible pour {bundle_identifier}")
     offset = segment.fileoff + info.executable_load_address - segment.vmaddr
     destination = Path(output)
+    if destination.exists() and destination.samefile(source):
+        raise PrelinkError("la destination désigne le noyau source")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with source.open("rb") as input_file, destination.open("wb") as output_file:
         input_file.seek(offset)
