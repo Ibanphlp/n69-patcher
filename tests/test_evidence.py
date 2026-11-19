@@ -216,3 +216,13 @@ class LiveRunFailureTests(unittest.TestCase):
 
     def test_live_run_succeeds_on_zero_exit(self):
         self.assertEqual(cli.run([sys.executable, "-c", "pass"], live=True), 0)
+
+
+class ProbeModelTests(unittest.TestCase):
+    def test_tsmc_model_is_not_confused_with_samsung(self):
+        out = "CPID: 0x8003\nMODEL: n69uap\nMODE: DFU\n"
+        self.assertEqual(cli.probe_model(out), "n69uap")
+        self.assertNotEqual(cli.probe_model(out), "n69ap")
+
+    def test_samsung_model(self):
+        self.assertEqual(cli.probe_model("MODEL: n69ap\n"), "n69ap")

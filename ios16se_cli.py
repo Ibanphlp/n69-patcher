@@ -14,6 +14,7 @@ Commands:
 
 import argparse
 import json
+import re
 import math
 import os
 import shutil
@@ -109,13 +110,20 @@ def get_iproxy() -> Path:
     return find_tool("iproxy")
 
 
-def read_device_probe() -> str:
-    """Return the existing recovery query for the N69AP device."""
+def probe_model(out: str) -> str:
+    match = re.search(r"^MODEL:\s*(\S+)", out, re.MULTILINE | re.IGNORECASE)
+    return match.group(1).lower() if match else ""
+
+
+def read_device_probe(board: Optional[str] = None) -> str:
+    """Return the recovery query if the device is `board` (or any N69 board when None)."""
     try:
         r = run([str(get_irecovery()), "-q"], capture=True, check=False)
         out = r.stdout.decode(errors="replace")
-        if "n69ap" not in out.lower():
-            say(f"Device is not N69AP in DFU mode:\n{out}", "error")
+        model = probe_model(out)
+        allowed = (board,) if board else ("n69ap", "n69uap")
+        if model not in allowed:
+            say(f"Device MODEL is {model or 'unknown'}, expected {' or '.join(allowed)}:\n{out}", "error")
             return ""
         return out
     except Exception as e:
@@ -265,7 +273,7 @@ def boot_device(args, capture_logs: bool = False):
         say(f"Capture {initial['attempt_id']}: {out_dir}")
     build_images(args.mode, args.im4m, getattr(args, "board", "n69ap"))
 
-    probe = read_device_probe()
+    probe = read_device_probe(getattr(args, "board", "n69ap"))
     if not probe:
         sys.exit(1)
 
