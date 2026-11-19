@@ -212,17 +212,20 @@ if [ -z "${LIOS_BIN:-}" ]; then
 fi
 export LIOS_BIN
 
-if [ "$OPT_DRY_RUN" -eq 1 ]; then
-    log "工作目录（dry-run，不创建）: $WK"
-else
-    log "工作目录: $WK"
-fi
+case "$STAGE:$OPT_DRY_RUN" in
+    status:*) ;;
+    *:1) log "工作目录（dry-run，不创建）: $WK" ;;
+    *) log "工作目录: $WK" ;;
+esac
 
 # ---------- 工作目录锁：避免两个 n61.sh 同时操作同一 -latest 目录 ----------
 LOCK_DIR=""
 LOCKED=0
 lock_workdir() {
     [ "$OPT_DRY_RUN" -eq 1 ] && return 0
+    if [ "$STAGE" = "status" ] && [ ! -d "$WK" ]; then
+        return 0
+    fi
     # 目录不可写多半是 sudo 运行留下的属主（后续 build 会全部失败，先给出修复命令）
     if [ ! -w "$WK" ]; then
         die "工作目录不可写: ${WK}
@@ -265,8 +268,10 @@ cleanup() {
         exit "$rc"
     fi
     # 失败退出时把 ramdisk 里的系统挂载也卸掉（否则下一次 apfs_deletefs/mount 会撞 resource busy）
-    ssh_run_timeout 8 "/sbin/umount /mnt1 2>/dev/null; /sbin/umount /mnt7 2>/dev/null; /sbin/umount /mnt6 2>/dev/null; /sbin/umount /mnt8 2>/dev/null; true" >/dev/null 2>&1 || true
-    donor_umount_all || true
+    if [ "$STAGE" != "status" ]; then
+        ssh_run_timeout 8 "/sbin/umount /mnt1 2>/dev/null; /sbin/umount /mnt7 2>/dev/null; /sbin/umount /mnt6 2>/dev/null; /sbin/umount /mnt8 2>/dev/null; true" >/dev/null 2>&1 || true
+        donor_umount_all || true
+    fi
     if [ -n "${IPROXY_PID:-}" ]; then
         kill "$IPROXY_PID" 2>/dev/null || true
     fi
@@ -275,7 +280,8 @@ cleanup() {
         rm -rf "$LOCK_DIR"
     fi
     # sudo 运行结束后把工作目录/state 交还给调用用户，避免之后的 ./n61.sh build 无法写
-    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+    if [ "$STAGE" != "status" ] && [ "$(id -u)" -eq 0 ] &&
+        [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
         chown -R "$SUDO_UID:$SUDO_GID" "$WK" 2>/dev/null || true
         [ -d "$REPO/state" ] && chown -R "$SUDO_UID:$SUDO_GID" "$REPO/state" 2>/dev/null || true
     fi

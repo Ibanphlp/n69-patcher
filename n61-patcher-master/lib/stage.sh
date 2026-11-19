@@ -257,6 +257,15 @@ stage_volumes() {
     [ -n "$data_name" ] || data_name="DataB"
     if dry; then log "dry-run：跳过创建卷。"; return 0; fi
     ssh_ensure
+    if [ "$T_NAME" = "n69-ios16" ]; then
+        guard_n69_recovery_role || return 1
+    fi
+    if apfs_vol_exists "$T_MNT_SYSTEM_B"; then
+        guard_target_volumes system
+    fi
+    if apfs_vol_exists "$T_MNT_DATA_B"; then
+        guard_target_volumes data
+    fi
     data_is_encrypted && encrypt=1
 
     if [ "${OPT_RECREATE_DATA:-0}" -eq 1 ] && apfs_vol_exists "$T_MNT_DATA_B"; then
@@ -297,6 +306,9 @@ stage_rootfs() {
     require_root rootfs
     preflight_install_inputs
     ssh_ensure
+    if [ "$T_NAME" = "n69-ios16" ]; then
+        guard_n69_recovery_role || return 1
+    fi
     # donor_mount 负责 owners 模式、复用已挂载点、校验 rootfs build 号（17H35）；
     # 卸载交给 EXIT trap（donor_umount_all），避免失败/中断时留下挂载。
     mnt="$(donor_mount j96)" || die "rootfs DMG 挂载失败"

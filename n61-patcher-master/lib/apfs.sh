@@ -421,8 +421,9 @@ apfs_vol_fs_flags() {   # name → 打印 flags
     local want="$1" i name
     apfs_volumes
     for i in "${APFS_V_IDX[@]}"; do
-        name="$(dd if="${APFS_V_BLOCK[$i]}" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
+        name="$(apfs_block_name "${APFS_V_BLOCK[$i]}")" || return 1
         [ "$name" = "$want" ] || continue
+        apfs_checksum_ok "${APFS_V_BLOCK[$i]}" || return 1
         rd_u64 "${APFS_V_BLOCK[$i]}" $APFS_FS_FLAGS_OFF
         return 0
     done
@@ -519,14 +520,14 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
         fi
     fi
     if [ "$write" -eq 1 ]; then
-        mnts="$(rsh '/sbin/mount')"
+        mnts="$(rsh '/sbin/mount')" || die "Could not verify APFS mounts. No roles changed."
         for pair in $spec; do
             idx="${pair%%:*}"
             case "$mnts" in *"/dev/disk0s1s$idx "*) die "s$idx 已挂载，先卸载" ;; esac
         done
     fi
     stamp="$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$WK/apfs-role-backup"
+    mkdir -p "$WK/apfs-role-backup" || die "Could not create APFS backup directory. No roles changed."
     for pair in $spec; do
         idx="${pair%%:*}"
         role=$(( ${pair##*:} ))
@@ -548,12 +549,13 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
         log "s$idx: role 0x$(printf '%x' "$old") -> 0x$(printf '%x' "$role")"
         [ "$write" -eq 1 ] || continue
         bak="$WK/apfs-role-backup/block-$paddr-s$idx-$stamp.bin"
-        cp -p "$blk" "$bak"
+        cp -p "$blk" "$bak" || die "Could not back up APFS s$idx."
         tmp="$WK/.role-s$idx.bin"
-        cp -p "$blk" "$tmp"
+        cp -p "$blk" "$tmp" || die "Could not stage APFS s$idx."
         printf "\\x$(printf '%02x' $(( role & 0xff )))\\x$(printf '%02x' $(( (role >> 8) & 0xff )))" |
-            dd of="$tmp" bs=1 seek=$(( APFS_ROLE_OFF )) count=2 conv=notrunc 2>/dev/null
-        apfs_seal "$tmp"
+            dd of="$tmp" bs=1 seek=$(( APFS_ROLE_OFF )) count=2 conv=notrunc 2>/dev/null ||
+            die "Could not stage the role change for APFS s$idx."
+        apfs_seal "$tmp" && apfs_checksum_ok "$tmp" || die "Invalid staged APFS checksum for s$idx."
         apfs_write_block "$paddr" "$tmp"
         readback="$(apfs_read_block_fresh "$paddr")" || die "s$idx: 读回失败"
         if ! cmp -s "$tmp" "$readback"; then
@@ -576,29 +578,46 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
 # 卷名是以 NUL 结尾的 C 字符串。删掉全部 NUL 会把结束符后面的残留字节拼进来，
 # 于是名字看起来是 SystemB，比较却失败。
 apfs_block_name() {   # blockfile
-    dd if="$1" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null |
-        LC_ALL=C awk 'BEGIN { RS="\0"; ORS="" } { gsub(/\r/, ""); sub(/[[:space:]]+$/, ""); print; exit }'
+    local name
+    IFS= read -r -d '' name < <(dd if="$1" bs=1 skip=$((APFS_NAME_OFF)) count=256 2>/dev/null) ||
+        return 1
+    printf '%s\n' "$name"
 }
 
-# 槽位 N 的卷名
-apfs_slot_name() {   # n
-    local n="$1"
-    apfs_volumes
-    [ -n "${APFS_V_BLOCK[$n]:-}" ] || return 1
-    apfs_block_name "${APFS_V_BLOCK[$n]}"
+guard_target_slot() {   # slice expected_name
+    local idx="$1" expected="$2" block name
+    block="${APFS_V_BLOCK[$idx]:-}"
+    [ -n "$block" ] || die "APFS s$idx is missing from the volume inventory."
+    apfs_checksum_ok "$block" || die "APFS s$idx has an invalid checksum."
+    name="$(apfs_block_name "$block")" || die "Could not read the APFS s$idx name."
+    [ "$name" = "$expected" ] || die "APFS s$idx is '$name', expected '$expected'."
 }
+
+guard_n69_recovery_role() (
+    # Keep the preflight inventory separate from later volume creation.
+    APFS_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/n69-apfs-preflight.XXXXXX")" ||
+        die "Could not create temporary APFS inventory."
+    trap apfs_cleanup EXIT
+    apfs_volumes
+    local idx
+    for idx in "${APFS_V_IDX[@]}"; do
+        [ "$idx" = "$T_MNT_SYSTEM_B" ] && continue
+        if [ "$(rd_u16 "${APFS_V_BLOCK[$idx]}" "$APFS_ROLE_OFF")" = "4" ]; then
+            die "APFS s$idx already holds the Recovery role. Stopping before installation writes."
+        fi
+    done
+)
 
 # 破坏性阶段前确认目标槽位真的是 SystemB / DataB，绝不碰原有卷（Update/xART/Preboot/...）
 guard_target_volumes() {   # [system|data|both]
     local what="${1:-both}" data_name sys_name
     data_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $2}')"
     sys_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $1}')"
+    apfs_volumes
     if [ "$what" != "data" ]; then
-        [ "$(apfs_slot_name "$T_MNT_SYSTEM_B" 2>/dev/null)" = "$sys_name" ] ||
-            die "拒绝操作：s${T_MNT_SYSTEM_B} 不是 ${sys_name}（实际: '$(apfs_slot_name "$T_MNT_SYSTEM_B" 2>/dev/null)'）。先跑 volumes。"
+        guard_target_slot "$T_MNT_SYSTEM_B" "$sys_name"
     fi
     if [ "$what" != "system" ]; then
-        [ "$(apfs_slot_name "$T_MNT_DATA_B" 2>/dev/null)" = "$data_name" ] ||
-            die "拒绝操作：s${T_MNT_DATA_B} 不是 ${data_name}（实际: '$(apfs_slot_name "$T_MNT_DATA_B" 2>/dev/null)'）。先跑 volumes。"
+        guard_target_slot "$T_MNT_DATA_B" "$data_name"
     fi
 }

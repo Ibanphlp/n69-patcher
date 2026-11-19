@@ -14,9 +14,12 @@ Commands:
 
 import argparse
 import json
+import math
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import socket
 import threading
@@ -165,31 +168,34 @@ def execute_command(cmd: str):
 
 
 @contextmanager
-def ssh_forward(port: int = 2222):
+def ssh_forward(port: int = 2222, startup_timeout: float = 8):
     """Start iproxy forwarding local port to device SSH port 22."""
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
-            say(f"Port {port} already forwarded — reusing existing tunnel", "info")
-            yield
-            return
+        with socket.create_connection(("127.0.0.1", port), timeout=min(0.3, startup_timeout)):
+            pass
     except OSError:
         pass
+    else:
+        say(f"Port {port} already forwarded — reusing existing tunnel", "info")
+        yield
+        return
 
     iproxy = get_iproxy()
     proc = subprocess.Popen([str(iproxy), str(port), "22"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + startup_timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("iproxy did not open port in time")
             if proc.poll() is not None:
                 raise RuntimeError("iproxy exited before opening port")
             try:
-                with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                with socket.create_connection(("127.0.0.1", port), timeout=min(0.3, remaining)):
                     say(f"iproxy tunnel established on port {port}", "success")
                     break
             except OSError:
-                time.sleep(0.2)
-        else:
-            raise RuntimeError("iproxy did not open port in time")
+                time.sleep(max(0, min(0.2, deadline - time.monotonic())))
         yield
     finally:
         proc.terminate()
@@ -200,20 +206,20 @@ def ssh_forward(port: int = 2222):
             proc.wait()
 
 
-def ssh_exec(port: int, command: str, timeout: int = 10) -> tuple[int, str, str]:
+def ssh_exec(port: int, command: str, timeout: float = 10) -> tuple[int, str, str]:
     """Execute command over SSH via iproxy tunnel."""
     sshpass = find_tool("sshpass")
     args = [
         str(sshpass), "-e", "ssh",
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
-        "-o", f"ConnectTimeout={timeout}",
+        "-o", f"ConnectTimeout={math.ceil(timeout)}",
         "-o", "LogLevel=ERROR",
         "-p", str(port), "root@127.0.0.1", command
     ]
     env = os.environ.copy()
     env["SSHPASS"] = "alpine"  # default ramdisk password
-    r = subprocess.run(args, capture_output=True, timeout=timeout+5, env=env)
+    r = subprocess.run(args, capture_output=True, timeout=timeout, env=env)
     return r.returncode, r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace")
 
 
@@ -293,182 +299,170 @@ def boot_device(args, capture_logs: bool = False):
     say("Executing bootx...", "info")
     execute_command("bootx")
 
-    say("Boot sequence sent. Device should now be booting iOS 16.", "success")
+    say("Boot sequence sent. Device boot remains unverified.", "info")
 
     if capture_logs:
-        say("Waiting for SSH to become available...", "info")
-        time.sleep(10)
-        capture_kernel_logs()
+        return capture_kernel_logs(port=args.port, max_wait=args.wait)
+
+
+SSH_COMMANDS = (
+    "sw_vers",
+    "mount",
+    "cat /cores/*.paniclog 2>/dev/null | head -200",
+    "log show --last 5m --style compact 2>/dev/null | tail -200",
+    "dmesg 2>/dev/null | tail -100",
+)
+
+
+def format_timeout(error: subprocess.TimeoutExpired) -> str:
+    report = f"{error}\n"
+    if error.stdout:
+        report += f"Partial stdout:\n{error.stdout.decode(errors='replace')}\n"
+    if error.stderr:
+        report += f"Partial stderr:\n{error.stderr.decode(errors='replace')}\n"
+    return report
+
+
+def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
+    """Wait for SSH and record each diagnostic result in the same log."""
+    deadline = time.monotonic() + wait
+    with log_file.open("w", encoding="utf-8") as log:
+        try:
+            with ssh_forward(port, startup_timeout=min(8, wait)):
+                while (remaining := deadline - time.monotonic()) > 0:
+                    try:
+                        code, out, err = ssh_exec(port, "echo SSH_OK", timeout=min(5, remaining))
+                        if code == 0 and out.strip() == "SSH_OK":
+                            break
+                        log.write(f"SSH probe exited {code}\n{err}\n")
+                    except subprocess.TimeoutExpired as error:
+                        log.write(f"SSH probe: {format_timeout(error)}")
+                    time.sleep(max(0, min(2, deadline - time.monotonic())))
+                else:
+                    log.write("Timed out waiting for SSH\n")
+                    return False
+
+                for command in SSH_COMMANDS:
+                    log.write(f"=== {command} ===\n")
+                    try:
+                        code, out, err = ssh_exec(port, command)
+                        log.write(f"Exit status: {code}\n{out}\n")
+                        if err:
+                            log.write(f"stderr:\n{err}\n")
+                    except subprocess.TimeoutExpired as error:
+                        log.write(format_timeout(error))
+                    except OSError as error:
+                        log.write(f"{error}\n")
+                return True
+        except (OSError, RuntimeError) as error:
+            log.write(f"SSH unavailable: {error}\n")
+            return False
 
 
 def capture_kernel_logs(port: int = 2222, max_wait: int = 180):
-    """Capture kernel logs via SSH after bootx (SevenUp/n56 style)."""
-    say("Starting kernel log capture via SSH...", "info")
+    """Capture kernel logs via SSH after bootx."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / f"kernel_{time.strftime('%Y%m%d-%H%M%S')}.log"
-
-    deadline = time.monotonic() + max_wait
-    ssh_ready = False
-    passwords = ["alpine", "root", ""]
-
-    with ssh_forward(port):
-        while time.monotonic() < deadline:
-            if not ssh_ready:
-                for pw in passwords:
-                    env = os.environ.copy()
-                    env["SSHPASS"] = pw
-                    r = subprocess.run([
-                        str(find_tool("sshpass")), "-e", "ssh",
-                        "-o", "StrictHostKeyChecking=no",
-                        "-o", "UserKnownHostsFile=/dev/null",
-                        "-o", "ConnectTimeout=5",
-                        "-o", "LogLevel=ERROR",
-                        "-p", str(port), "root@127.0.0.1", "echo SSH_OK"
-                    ], capture_output=True, timeout=10, env=env)
-                    if b"SSH_OK" in r.stdout:
-                        ssh_ready = True
-                        say(f"SSH connected (password: '{pw}')", "success")
-                        break
-                if not ssh_ready:
-                    say("  Waiting for SSH...", "info")
-                    time.sleep(5)
-                    continue
-
-            # SSH ready — capture logs
-            say("Capturing kernel logs...", "info")
-            with open(log_file, "a") as f:
-                # System version
-                code, out, _ = ssh_exec(port, "sw_vers")
-                if code == 0:
-                    f.write(f"=== sw_vers ===\n{out}\n")
-                    print(out.strip())
-
-                # Mounts
-                code, out, _ = ssh_exec(port, "mount")
-                if code == 0:
-                    f.write(f"=== mount ===\n{out}\n")
-
-                # Panic logs
-                code, out, _ = ssh_exec(port, "cat /cores/*.paniclog 2>/dev/null | head -200")
-                if code == 0 and out.strip():
-                    f.write(f"=== PANIC LOG ===\n{out}\n")
-                    say("!!! PANIC LOG CAPTURED !!!", "warning")
-                    print(out)
-                else:
-                    f.write("=== No panic log yet ===\n")
-
-                # Recent kernel log
-                code, out, _ = ssh_exec(port, "log show --last 5m --style compact 2>/dev/null | tail -200")
-                if code == 0:
-                    f.write(f"=== log show (last 5m) ===\n{out}\n")
-                    print(out)
-
-                # dmesg equivalent
-                code, out, _ = ssh_exec(port, "dmesg 2>/dev/null | tail -100")
-                if code == 0 and out.strip():
-                    f.write(f"=== dmesg ===\n{out}\n")
-
-            say(f"Logs saved to {log_file}", "success")
-            return 0
-
-    say("Timed out waiting for SSH", "error")
-    return 1
+    out_dir = Path(tempfile.mkdtemp(prefix="kernel-", dir=LOGS_DIR))
+    log_file = out_dir / "ssh.log"
+    connected = collect_ssh_logs(log_file, port, max_wait)
+    say(f"SSH diagnostics saved to {log_file}", "info" if connected else "warning")
+    return 0 if connected else 1
 
 
-def capture_logs(wait: int = 180):
-    """Full post-bootx diagnostic capture (our existing capture_logs.sh in Python)."""
-    say(f"Capturing device state for up to {wait}s...", "info")
+def record_command(out_dir: Path, filename: str, cmd: list[str]) -> str:
+    """Save one host diagnostic and keep collecting if the tool fails."""
+    try:
+        result = run(cmd, capture=True, check=False, timeout=10)
+        out = result.stdout.decode(errors="replace")
+        err = result.stderr.decode(errors="replace")
+        report = out
+        if err or result.returncode:
+            report += f"\nExit status: {result.returncode}\n{err}"
+    except subprocess.TimeoutExpired as error:
+        out = ""
+        report = format_timeout(error)
+    except OSError as error:
+        out = ""
+        report = f"{error}\n"
+    (out_dir / filename).write_text(report, encoding="utf-8")
+    return out
+
+
+def capture_logs(wait: int = 180, port: int = 2222):
+    """Collect available host and device diagnostics independently."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    out_dir = LOGS_DIR / f"capture-{time.strftime('%Y%m%d-%H%M%S')}"
-    out_dir.mkdir(parents=True)
+    out_dir = Path(tempfile.mkdtemp(prefix="capture-", dir=LOGS_DIR))
 
-    # 1. USB enumeration
-    say("1/5 USB enumeration", "info")
-    r = run(["lsusb"], capture=True, check=False)
-    (out_dir / "lsusb.txt").write_text(r.stdout.decode(errors="replace"))
+    if sys.platform == "darwin":
+        record_command(out_dir, "system-profiler-usb.txt", ["system_profiler", "SPUSBDataType"])
+    else:
+        record_command(out_dir, "lsusb.txt", ["lsusb"])
+    record_command(out_dir, "irecovery.txt", [str(get_irecovery()), "-q"])
 
-    # 2. irecovery mode
-    say("2/5 irecovery mode", "info")
-    r = run([str(get_irecovery()), "-q"], capture=True, check=False)
-    irec_out = r.stdout.decode(errors="replace")
-    (out_dir / "irecovery.txt").write_text(irec_out)
-    print(irec_out)
-
-    # 3. Pairing
-    say("3/5 libimobiledevice pairing", "info")
-    r = run(["idevice_id", "-l"], capture=True, check=False)
-    udids = r.stdout.decode().strip().split()
+    udids = record_command(out_dir, "idevice-id.txt", ["idevice_id", "-l"]).split()
     if udids:
         udid = udids[0]
-        say(f"UDID: {udid}", "info")
-        r = run(["ideviceinfo", "-u", udid], capture=True, check=False)
-        (out_dir / "device-info.txt").write_text(r.stdout.decode(errors="replace"))
-        r = run(["idevicepair", "-u", udid, "pair"], capture=True, check=False)
-        if r.returncode == 0:
-            say("Pairing successful", "success")
-        else:
-            say("Pairing failed — accept 'Trust' on device if screen is on", "warning")
+        record_command(out_dir, "device-info.txt", ["ideviceinfo", "-u", udid])
+        record_command(out_dir, "pairing.txt", ["idevicepair", "-u", udid, "validate"])
 
-    # 4. SSH + logs
-    say("4/5 SSH via iproxy", "info")
-    with ssh_forward():
-        time.sleep(2)
-        for pw in ["alpine", "root"]:
-            code, out, _ = ssh_exec(2222, "echo SSH_OK")
-            if code == 0 and "SSH_OK" in out:
-                say(f"SSH works (password: {pw})", "success")
-                for cmd in ["sw_vers", "mount", "cat /cores/*.paniclog 2>/dev/null | head -200"]:
-                    code, out, _ = ssh_exec(2222, cmd)
-                    (out_dir / "ssh.log").write_text(out)
-                    print(out)
-                break
-        else:
-            say("SSH unavailable (no ramdisk sshd or rootfs not mounted)", "warning")
+    if not collect_ssh_logs(out_dir / "ssh.log", port, wait):
+        say("SSH unavailable. See ssh.log for details.", "warning")
 
-    # 5. Crash reports
-    say("5/5 Crash reports", "info")
     if udids:
-        r = run(["idevicecrashreport", "-u", udid, "-k", str(out_dir / "crash")], capture=True, check=False)
-        if r.returncode == 0:
-            panic_files = list((out_dir / "crash").glob("*.panic"))
-            if panic_files:
-                say("PANIC REPORT FOUND:", "warning")
-                print(panic_files[0].read_text()[:2000])
-            else:
-                say("No .panic file yet — kernel panics surface ~1-2 min after boot", "info")
+        record_command(out_dir, "crash-report.txt",
+                       ["idevicecrashreport", "-u", udid, "-k", str(out_dir / "crash")])
 
-    say(f"Artifacts saved to: {out_dir}", "success")
+    say(f"Diagnostics saved to {out_dir}", "info")
 
 
 def doctor():
-    """Verify host tools and firmware."""
-    say("Checking host tools...", "info")
-    tools = ["irecovery", "gaster", "img4", "img4tool", "iBoot64Patcher", "kairos", "iproxy", "sshpass", "idevice_id", "ideviceinfo", "idevicepair", "idevicecrashreport"]
-    for t in tools:
-        p = find_tool(t)
-        if p.exists() or t in ["idevice_id", "ideviceinfo", "idevicepair", "idevicecrashreport"]:
-            say(f"  {t}: {p if p.exists() else 'system PATH'}", "success")
-        else:
-            say(f"  {t}: MISSING", "error")
+    """Verify required host inputs for the Python build and report optional diagnostics."""
+    from src.ios16se.build import captured_sep_path, get_ipsw_path, load_config
+    from src.ios16se.img4_tool import get_img4_tool
 
-    # Check IPSWs
-    say("\nChecking firmware...", "info")
-    ipsws = [
-        ("iPhone SE iOS 15.8.8", SCRIPT_DIR / "firmware" / "iPhone_4.0_64bit_15.8.8_19H422_Restore.ipsw"),
-        ("iPad 5 iPadOS 16.7.16", SCRIPT_DIR / "firmware" / "iPad_64bit_TouchID_ASTC_16.7.16_20H392_Restore.ipsw"),
-    ]
-    for name, path in ipsws:
-        if path.exists():
-            say(f"  {name}: {path} ({path.stat().st_size:,} bytes)", "success")
+    config = load_config(SCRIPT_DIR / "profiles" / "n69ap_ios16.toml")
+    required_ok = True
+    say("Checking required host tools...", "info")
+    for name in ("irecovery", "gaster", "iBoot64Patcher", "kairos"):
+        path = SCRIPT_DIR / config.tools[name]
+        if path.is_file() and os.access(path, os.X_OK):
+            say(f"  {name}: {path}", "success")
         else:
-            say(f"  {name}: MISSING at {path}", "error")
-
-    # Check IM4M
-    im4m = STATE_DIR / "IM4M.bin"
-    if im4m.exists():
-        say(f"  IM4M: {im4m} ({im4m.stat().st_size:,} bytes)", "success")
+            required_ok = False
+            say(f"  {name}: missing or not executable at {path}", "error")
+    try:
+        say(f"  img4: {get_img4_tool().binary}", "success")
+    except (OSError, RuntimeError) as error:
+        required_ok = False
+        say(f"  img4: {error}", "error")
+    img4tool = find_tool("img4tool")
+    resolved_img4tool = str(img4tool) if img4tool.is_absolute() else shutil.which("img4tool")
+    if resolved_img4tool:
+        say(f"  img4tool: {resolved_img4tool}", "success")
     else:
-        say(f"  IM4M: MISSING at {im4m}", "error")
+        required_ok = False
+        say("  img4tool: missing or not executable", "error")
+
+    say("Checking firmware and ticket inputs...", "info")
+    paths = [get_ipsw_path(config, name) for name in ("target_ios15", "donor_ipados16")]
+    paths.extend([Path(config.output["im4m"]), captured_sep_path(config)])
+    for relative_path in paths:
+        path = SCRIPT_DIR / relative_path
+        if path.is_file() and path.stat().st_size > 0:
+            say(f"  {path} ({path.stat().st_size:,} bytes)", "success")
+        else:
+            required_ok = False
+            say(f"  Missing or empty: {path}", "error")
+
+    say("Checking optional diagnostics...", "info")
+    for name in ("iproxy", "sshpass", "idevice_id", "ideviceinfo", "idevicepair", "idevicecrashreport"):
+        path = find_tool(name)
+        resolved = str(path) if path.is_absolute() else shutil.which(name)
+        if resolved:
+            say(f"  {name}: {resolved}", "success")
+        else:
+            say(f"  {name}: missing", "warning")
+    return 0 if required_ok else 1
 
 
 def clean_all():
@@ -549,11 +543,12 @@ Examples:
     boot_cap.add_argument("--mode", choices=["full", "minimal", "safe-minimal"], default="full",
                           help="Build mode (default: full)")
     boot_cap.add_argument("--im4m", type=Path, help="Path to IM4M.bin (default: state/IM4M.bin)")
-    boot_cap.add_argument("--wait", type=int, default=180, help="Max wait for SSH")
+    boot_cap.add_argument("--wait", type=int, default=180, help="Max wait for SSH (seconds)")
+    boot_cap.add_argument("--port", type=int, default=2222, help="SSH forward port (default: 2222)")
 
     # Logs command
     logs_parser = sub.add_parser("logs", help="Capture post-bootx device state")
-    logs_parser.add_argument("--wait", type=int, default=180, help="Max wait time for SSH/logs (seconds)")
+    logs_parser.add_argument("--wait", type=int, default=180, help="Max wait for SSH (seconds)")
     logs_parser.add_argument("--port", type=int, default=2222, help="SSH forward port (default: 2222)")
 
     sub.add_parser("status", help="Show build and device status")
@@ -561,26 +556,31 @@ Examples:
     sub.add_parser("clean", help="Remove build artifacts")
 
     args = parser.parse_args()
+    if args.command in ("boot-capture", "logs"):
+        if args.wait < 1:
+            parser.error("--wait must be at least 1 second")
+        if not 1 <= args.port <= 65535:
+            parser.error("--port must be between 1 and 65535")
 
     if args.command == "build":
         build_images(args.mode, args.im4m)
     elif args.command == "boot":
         boot_device(args)
     elif args.command == "boot-capture":
-        boot_device(args, capture_logs=True)
+        return boot_device(args, capture_logs=True)
     elif args.command == "logs":
-        capture_logs(args.wait)
+        capture_logs(wait=args.wait, port=args.port)
     elif args.command == "status":
         status()
     elif args.command == "doctor":
-        doctor()
+        return doctor()
     elif args.command == "clean":
         clean_all()
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except KeyboardInterrupt:
         say("\nInterrupted by user", "warning")
         sys.exit(130)
