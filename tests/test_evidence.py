@@ -218,11 +218,15 @@ class LiveRunFailureTests(unittest.TestCase):
         self.assertEqual(cli.run([sys.executable, "-c", "pass"], live=True), 0)
 
 
-class ProbeModelTests(unittest.TestCase):
+class ProbeBoardTests(unittest.TestCase):
     def test_tsmc_model_is_not_confused_with_samsung(self):
-        out = "CPID: 0x8003\nMODEL: n69uap\nMODE: DFU\n"
-        self.assertEqual(cli.probe_model(out), "n69uap")
-        self.assertNotEqual(cli.probe_model(out), "n69ap")
+        self.assertEqual(cli.probe_board("CPID: 0x8003\nMODEL: n69uap\n"), "n69uap")
+
+    def test_tsmc_cpid_reporting_n69ap_model_is_tsmc(self):
+        self.assertEqual(cli.probe_board("CPID: 0x8003\nMODEL: n69ap\n"), "n69uap")
 
     def test_samsung_model(self):
-        self.assertEqual(cli.probe_model("MODEL: n69ap\n"), "n69ap")
+        self.assertEqual(cli.probe_board("CPID: 0x8000\nMODEL: n69ap\n"), "n69ap")
+
+    def test_non_n69_probe_is_rejected(self):
+        self.assertEqual(cli.probe_board("CPID: 0x8010\nMODEL: d10ap\n"), "")

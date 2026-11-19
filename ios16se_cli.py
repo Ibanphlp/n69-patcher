@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.ios16se import diagnostics
+from src.ios16se.soc import SocMismatch, identity_from_probe
 from src.ios16se.diagnostics import write_evidence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -110,9 +111,12 @@ def get_iproxy() -> Path:
     return find_tool("iproxy")
 
 
-def probe_model(out: str) -> str:
-    match = re.search(r"^MODEL:\s*(\S+)", out, re.MULTILINE | re.IGNORECASE)
-    return match.group(1).lower() if match else ""
+def probe_board(out: str) -> str:
+    """Board from MODEL+CPID, as the builder decides it (CPID 0x8003 is TSMC)."""
+    try:
+        return identity_from_probe(out).model
+    except SocMismatch:
+        return ""
 
 
 def read_device_probe(board: Optional[str] = None) -> str:
@@ -120,10 +124,10 @@ def read_device_probe(board: Optional[str] = None) -> str:
     try:
         r = run([str(get_irecovery()), "-q"], capture=True, check=False)
         out = r.stdout.decode(errors="replace")
-        model = probe_model(out)
+        found = probe_board(out)
         allowed = (board,) if board else ("n69ap", "n69uap")
-        if model not in allowed:
-            say(f"Device MODEL is {model or 'unknown'}, expected {' or '.join(allowed)}:\n{out}", "error")
+        if found not in allowed:
+            say(f"Device board is {found or 'unknown'}, expected {' or '.join(allowed)}:\n{out}", "error")
             return ""
         return out
     except Exception as e:
