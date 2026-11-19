@@ -375,6 +375,13 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     ctx, selection, flow = make_flow(args)
 
+    if (
+        not args.dry_run
+        and args.stage in {"install", "all", "rootfs", "patch-rootfs"}
+        and any(p.id == "rootfs.set_roles" for p in selection.get("rootfs", []))
+    ):
+        log.die("The selected legacy Python install cannot verify APFS role changes. Stopped before modifying the device.")
+
     if args.stage == "list":
         log.log(f"目标 {ctx.t['name']}  features={ctx.t.get('features')}")
         print(patchmod.summary(selection))
