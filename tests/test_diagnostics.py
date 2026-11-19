@@ -10,9 +10,32 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import ios16se_cli as cli
+from src.ios16se.build import load_config
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_doctor_finds_bundled_img4_outside_repository(self):
+        root = Path(cli.__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as working_dir:
+            # Use a fixture binary inside a separate project directory and
+            # disable the PATH fallback so the result is independent of the host.
+            project = Path(working_dir) / "project"
+            tool = project / "ramdisk-main" / "Linux" / "img4"
+            tool.parent.mkdir(parents=True)
+            tool.write_bytes(b"\x7fELF")
+            tool.chmod(0o755)
+            output = io.StringIO()
+            config = load_config(root / "profiles" / "n69ap_ios16.toml")
+            with (
+                patch.object(cli, "SCRIPT_DIR", project),
+                patch.object(cli.sys, "platform", "linux"),
+                patch("src.ios16se.build.load_config", return_value=config),
+                patch("shutil.which", return_value=None),
+                contextlib.redirect_stdout(output),
+            ):
+                cli.doctor()
+            self.assertIn(f"img4: {tool}", output.getvalue())
+
     def test_doctor_requires_nonempty_inputs_and_executable_tools(self):
         with tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()):
             root = Path(root)

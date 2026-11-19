@@ -431,7 +431,7 @@ def doctor():
             required_ok = False
             say(f"  {name}: missing or not executable at {path}", "error")
     try:
-        say(f"  img4: {get_img4_tool().binary}", "success")
+        say(f"  img4: {get_img4_tool(project_dir=SCRIPT_DIR).binary}", "success")
     except (OSError, RuntimeError) as error:
         required_ok = False
         say(f"  img4: {error}", "error")
