@@ -245,3 +245,33 @@ class DiagnosticsTests(unittest.TestCase):
             report = next(Path(directory).iterdir())
             self.assertFalse((report / "crash").exists())
             self.assertIn("Cannot match", (report / "crash-report.txt").read_text())
+
+    def test_ssh_text_does_not_prove_the_donor_kernel_ran_on_this_se(self):
+        cases = {
+            "old_panic": (
+                "=== uname -rv ===\nExit status: 0\nDarwin Kernel Version 21.6.0\n"
+                "=== cat /cores/*.paniclog ===\nExit status: 0\n"
+                "Darwin Kernel Version 22.6.0: old panic\n"
+            ),
+            "unidentified_ssh_endpoint": (
+                "=== uname -rv ===\nExit status: 0\nDarwin Kernel Version 22.6.0\n"
+            ),
+            "failed_uname": (
+                "=== uname -rv ===\nExit status: 1\nstderr:\nDarwin Kernel Version 22.6.0\n"
+            ),
+        }
+        for case, log in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                report = Path(directory)
+                (report / "ssh.log").write_text(log)
+                # USB identity does not identify the endpoint behind an unbound SSH tunnel.
+                cli.write_evidence(
+                    report, True,
+                    "ProductType: iPhone8,4\nBuildVersion: 19H422\n", True,
+                    {"requested_mode": "full"},
+                )
+                evidence = json.loads((report / "evidence.json").read_text())
+                self.assertEqual(evidence["donor_kernel_entry"], "unproven")
+                self.assertTrue(evidence["ssh_connected"])
+                self.assertTrue(evidence["device_observation"]["matches_pre_boot_ecid"])
+                self.assertEqual((report / "ssh.log").read_text(), log)

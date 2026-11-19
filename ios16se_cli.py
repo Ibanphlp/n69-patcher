@@ -449,14 +449,16 @@ def write_evidence(out_dir: Path, connected: bool, info: str | None, matched: bo
         key, sep, value = line.partition(": ")
         if sep and key in ("ProductType", "ProductVersion", "BuildVersion"):
             fields[key] = value.strip()
-    ssh_log = out_dir / "ssh.log"
-    ssh_text = ssh_log.read_text(errors="replace") if ssh_log.is_file() else ""
-    entry = "observed via SSH uname" if connected and "Darwin Kernel Version 22." in ssh_text else "unproven"
     crash = out_dir / "crash"
     reports = sorted(path for path in crash.rglob("*") if path.is_file()) if crash.is_dir() else []
     evidence = {
         "host_context": host_context,
-        "donor_kernel_entry": entry,
+        "donor_kernel_entry": "unproven",
+        "donor_kernel_entry_reason": (
+            "SSH is not bound to the pre-boot device identity and the combined log "
+            "may contain older panic reports. Attribution requires a current kernel "
+            "response tied to this device, attempt and donor build."
+        ),
         "ssh_connected": connected,
         "device_observation": {**fields, "matches_pre_boot_ecid": matched} if fields else None,
         "stored_reports": [stored_report_summary(path) for path in reports],
