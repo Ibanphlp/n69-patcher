@@ -6,7 +6,7 @@
 #   ./run_boot.sh [full|minimal|safe-minimal] [--boot]
 #
 # Modes:
-#   full          - All driver patches + WiFi + SEP compatibility
+#   full          - Includes display power, LCD and touchscreen adaptations
 #   minimal       - Only essential patches (remove_ipad_drivers, generic_security)
 #   safe-minimal  - PMU + SEP legacy patches only (safest for unknown hardware)
 #

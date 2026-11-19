@@ -45,31 +45,33 @@ def audit(se_kernel: Path, ipad_kernel: Path) -> dict:
         "springboard_boot": "unproven",
         "note": (
             "A structural pass means the SevenUP engine accepted the reviewed "
-            "bindings. It is not a serial log of the SE PMU, Pinot, or launchd."
+            "bindings. The touch trial covers the SPI driver only. "
+            "Physical PMU, display and touchscreen operation remain unverified."
         ),
         "drivers": {},
     }
-    current = ipad_kernel
-    for name, footprint, donor in CASES:
-        entry = {"footprint": footprint, "se_driver": donor}
-        try:
-            with tempfile.TemporaryDirectory(prefix=f"n69-{name}-") as tmp:
-                produced = transplant_footprint(current, se_kernel, Path(tmp), footprint, donor, book)
-                # Keep the chained kernel only in memory via the returned file
-                # for the next case. Copy it out of the temporary directory.
-                chained = Path(tmp).parent / f"n69-audit-{name}.raw"
-                chained.write_bytes(produced.read_bytes())
-            entry["trial"] = "structural pass; SevenUP accepted the reviewed bindings"
-            entry["bindings"] = len(book.bind_bundle(donor))
-            entry["output_sha256"] = digest(chained)
-            current = chained
+    with tempfile.TemporaryDirectory(prefix="n69-audit-") as scratch:
+        current = ipad_kernel
+        failed = None
+        for name, footprint, donor in CASES:
+            entry = {"footprint": footprint, "se_driver": donor}
             result["drivers"][name] = entry
-        except Exception as error:
-            entry["trial"] = f"rejected: {type(error).__name__}: {error}"
-            result["drivers"][name] = entry
-            break
+            if failed is not None:
+                entry["trial"] = f"not run after {failed} failed"
+                continue
+            try:
+                work = Path(scratch) / name
+                work.mkdir()
+                produced = transplant_footprint(current, se_kernel, work, footprint, donor, book)
+                entry["bindings"] = len(book.bind_bundle(donor))
+                entry["output_sha256"] = digest(produced)
+                entry["trial"] = "structural pass; SevenUP accepted the reviewed bindings"
+                current = produced
+            except Exception as error:
+                entry["trial"] = f"rejected: {type(error).__name__}: {error}"
+                failed = name
     passed = [name for name, info in result["drivers"].items() if info["trial"].startswith("structural pass")]
-    result["structural_pass"] = passed == ["pmu", "display", "touch"]
+    result["structural_pass"] = len(passed) == len(CASES)
     return result
 
 
@@ -81,6 +83,11 @@ def main() -> int:
     args = parser.parse_args()
     if not args.ipad_kernel.is_file() or not args.se_kernel.is_file():
         print(f"kernels missing: {args.ipad_kernel} {args.se_kernel}", file=sys.stderr)
+        return 2
+    if args.write and args.write.exists() and any(
+        args.write.samefile(kernel) for kernel in (args.se_kernel, args.ipad_kernel)
+    ):
+        print("Report destination refers to an input kernel.", file=sys.stderr)
         return 2
     report = audit(args.se_kernel, args.ipad_kernel)
     text = json.dumps(report, indent=2)

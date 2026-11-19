@@ -68,12 +68,12 @@ This downloads:
 ## Build Modes
 
 ```bash
-./n69ap_ios16_full_install.sh full          # All drivers + charger
+./n69ap_ios16_full_install.sh full
 ./n69ap_ios16_full_install.sh minimal       # Security only
 ./n69ap_ios16_full_install.sh safe-minimal   # PMU + SEP only
 ```
 
-**Full mode includes**: PMU driver, Touch ID, Display, Audio, WiFi, SEP, and Charger patches
+The N69AP profile enables PMU, display power, LCD, touchscreen and SEP changes. Audio, Wi-Fi, charger and haptic patches are disabled. Touch ID remains unverified. [Driver coverage](N69AP_BOOT_GUIDE.md#driver-transplants)
 
 ---
 

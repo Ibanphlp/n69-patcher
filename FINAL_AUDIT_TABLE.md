@@ -28,7 +28,7 @@ Out of scope: passcode and Touch ID, baseband, and an untethered boot.
 | **KERNEL PATCHES (SevenUP engine)** |
 | Remove iPad drivers | N/A | ✅ | ✅ | ✅ IDREF inlining | **Complete** |
 | PMU transplant | D2207 | D2186 | ✅ | D2255 in the D2365 slots, bindings reviewed | **Structural only** |
-| Touch transplant | SPIC1F15 | SN2400 | ✅ | AppleMultitouchSPI plus the SPIN69 personality | **Structural only** |
+| Touch transplant | SPIC1F15 | SN2400 | ✅ | The recorded trial covers AppleMultitouchSPI. The SPIN69 personality is a separate step. | **SPI structural only** |
 | Display transplant | DPDisplay | DPDisplay | ✅ | Pinot replaces AppleDPDisplay | **Structural only** |
 | Audio codec transplant | CS42L67 | CS42L81 | ✅ | Not on the boot path | **Not booted** |
 | Audio amp transplant | N/A | AE2 | ✅ | Withheld; no missing-amp personality | **Not booted** |
@@ -98,7 +98,7 @@ Out of scope: passcode and Touch ID, baseband, and an untethered boot.
 | # | Component | Status | Impact |
 |---|-----------|--------|--------|
 | 1 | **Generic KPF security** | Pattern-based only (not full KPF) | Boot-args mitigate; may need RE for exact offsets |
-| 2 | **C26 Charger** | Fallback footprints implemented | May need larger footprint if all fail |
+| 2 | **C26 Charger** | Disabled in the N69AP profile | Hardware charging remains unverified |
 | 3 | **kc_patch.py legacy stubs** | Old files have TODO stubs | Not used - new n61 patches are primary |
 | 4 | **install.py** | Placeholder for ramdisk SSH | n61.sh handles this |
 
@@ -109,23 +109,21 @@ Out of scope: passcode and Touch ID, baseband, and an untethered boot.
 | Category | Score |
 |----------|-------|
 | Boot Chain Build | **100%** |
-| Kernel Patches | **95%** |
+| Kernel Patches | Three recorded driver linking trials |
 | RootFS Pipeline | **100%** |
 | Patch-Rootfs | **100%** |
 | SevenUP Engine | **100%** |
 | Orchestration | **100%** |
 | Documentation | **100%** |
-| **OVERALL** | **~97%** |
 
 ---
 
 ## Verdict
 
-**The project is ~97% complete and ready for Mac installation.**
+Open items include the following.
 
-The only remaining items are:
 1. **Generic KPF** - Pattern-based patches may need offset refinement via RE (boot-args currently mitigate)
-2. **C26 Charger** - Fallback footprint chain implemented; needs device test
+2. **C26 Charger** - The N69AP implementation declines the transplant.
 3. **Device test** - Full end-to-end on real hardware
 
-All infrastructure is built, all patches registered, all rootfs patches available. Ready for Mac transfer and device test.
+See the [driver coverage table](N69AP_BOOT_GUIDE.md#driver-transplants) for the evidence available per component.

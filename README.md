@@ -5,7 +5,7 @@ This project provides an automated tethered boot pipeline for the iPhone SE 1st 
 ## Features
 - **Boot Chain Build**: Full automated build of iBSS, iBEC, DT, TC, SEP, and KernelCache.
 - **SevenUP Transplant Engine**: Ported for kernel driver displacement on N69AP.
-- **Full Patch Pipeline**: Implements PMU, Touch, Display, Audio, WiFi, SEP, and Charger patches.
+- **N69AP drivers** — The project records structural checks for the PMU, display and touchscreen SPI driver. [Driver coverage](N69AP_BOOT_GUIDE.md#driver-transplants)
 - **Installation Pipeline**: Includes scripts for APFS volume creation, rootfs streaming, and finalizing the installation.
 
 ## Installation Pipeline
