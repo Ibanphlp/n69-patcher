@@ -186,8 +186,8 @@ def extract_driver(path: str | Path, bundle_identifier: str, output: str | Path)
     info = metadata(source, bundle_identifier)
     if (info.executable_load_address, info.executable_size) != (
         record.executable_load_address, record.executable_size
-    ) or info.dependencies != record.dependencies:
-        raise PrelinkError(f"les métadonnées d'extraction ne correspondent pas à la fiche de {bundle_identifier}")
+    ):
+        raise PrelinkError(f"la plage d'extraction ne correspond pas à la fiche de {bundle_identifier}")
     macho = inspect_macho_bytes(source.read_bytes())
     segment = next(
         (

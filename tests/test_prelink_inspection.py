@@ -41,6 +41,21 @@ def kernel(xml):
 
 
 class DriverInspectionTests(unittest.TestCase):
+    def test_extract_range_with_referenced_dependency(self):
+        payload = b"S" * 0x60
+        xml = RECORDS.replace(b'<string ID="1">1</string>', b'<string IDREF="1"/>')
+        xml = xml.replace(b"<key>Libraries</key>", b'<key>Version</key><string ID="1">1</string><key>Libraries</key>')
+        header = struct.pack("<8I", 0xfeedfacf, 0, 0, 2, 2, 144, 0, 0)
+        start = len(header) + 144
+        text = struct.pack("<2I16s4Q4I", 25, 72, b"__TEXT", 0x4000, len(payload), start, len(payload), 0, 0, 0, 0)
+        info = struct.pack("<2I16s4Q4I", 25, 72, b"__PRELINK_INFO", 0, len(xml), start + len(payload), len(xml), 0, 0, 0, 0)
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "kernel"
+            source.write_bytes(header + text + info + payload + xml)
+            output = Path(directory) / "driver"
+            prelink.extract_driver(source, "test.spi", output)
+            self.assertEqual(output.read_bytes(), payload)
+
     def test_inventory_uses_direct_records_and_resolves_references(self):
         records = prelink.driver_records(RECORDS + b"\0" * 20)
         self.assertEqual(set(records), {"test.spi", "test.spin", "test.lcd"})
