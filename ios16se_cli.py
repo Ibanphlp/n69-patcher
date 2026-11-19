@@ -415,9 +415,10 @@ def capture_logs(wait: int = 180, port: int = 2222):
     say(f"Diagnostics saved to {out_dir}", "info")
 
 
-def doctor():
+def doctor(*, verify_firmware: bool = False):
     """Verify required host inputs for the Python build and report optional diagnostics."""
     from src.ios16se.build import captured_sep_path, get_ipsw_path, load_config
+    from src.ios16se.firmware import verify
     from src.ios16se.img4_tool import get_img4_tool
 
     config = load_config(SCRIPT_DIR / "profiles" / "n69ap_ios16.toml")
@@ -444,15 +445,29 @@ def doctor():
         say("  img4tool: missing or not executable", "error")
 
     say("Checking firmware and ticket inputs...", "info")
-    paths = [get_ipsw_path(config, name) for name in ("target_ios15", "donor_ipados16")]
-    paths.extend([Path(config.output["im4m"]), captured_sep_path(config)])
-    for relative_path in paths:
+    inputs = [
+        (get_ipsw_path(config, "target_ios15"), "target-ios15"),
+        (get_ipsw_path(config, "donor_ipados16"), "donor-ipados16"),
+        (Path(config.output["im4m"]), None),
+        (captured_sep_path(config), None),
+    ]
+    for relative_path, role in inputs:
         path = SCRIPT_DIR / relative_path
-        if path.is_file() and path.stat().st_size > 0:
-            say(f"  {path} ({path.stat().st_size:,} bytes)", "success")
-        else:
+        if not path.is_file() or path.stat().st_size == 0:
             required_ok = False
             say(f"  Missing or empty: {path}", "error")
+            continue
+        if verify_firmware and role:
+            say(f"  Checking IPSW hash and manifest: {path}", "info")
+            try:
+                result = verify(path, role)
+            except (OSError, ValueError) as error:
+                required_ok = False
+                say(f"  {error}", "error")
+            else:
+                say(f"  Verified {path.name} ({result.requirement.build})", "success")
+        else:
+            say(f"  {path} ({path.stat().st_size:,} bytes)", "success")
 
     say("Checking optional diagnostics...", "info")
     for name in ("iproxy", "sshpass", "idevice_id", "ideviceinfo", "idevicepair", "idevicecrashreport"):
@@ -552,7 +567,9 @@ Examples:
     logs_parser.add_argument("--port", type=int, default=2222, help="SSH forward port (default: 2222)")
 
     sub.add_parser("status", help="Show build and device status")
-    sub.add_parser("doctor", help="Verify host tools and firmware")
+    doctor_parser = sub.add_parser("doctor", help="Check host tools and required inputs")
+    doctor_parser.add_argument("--verify-firmware", action="store_true",
+                               help="Check IPSW hashes, builds, and device boards")
     sub.add_parser("clean", help="Remove build artifacts")
 
     args = parser.parse_args()
@@ -573,7 +590,7 @@ Examples:
     elif args.command == "status":
         status()
     elif args.command == "doctor":
-        return doctor()
+        return doctor(verify_firmware=args.verify_firmware)
     elif args.command == "clean":
         clean_all()
 

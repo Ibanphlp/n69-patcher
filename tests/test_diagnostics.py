@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import ios16se_cli as cli
 from src.ios16se.build import load_config
+from src.ios16se.firmware import verify
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -57,10 +58,17 @@ class DiagnosticsTests(unittest.TestCase):
                 patch.object(cli, "SCRIPT_DIR", root),
                 patch.object(cli, "find_tool", return_value=root / "img4tool"),
                 patch("src.ios16se.build.load_config", return_value=config),
-                patch("src.ios16se.build.get_ipsw_path", side_effect=inputs[:2] * 3),
+                patch("src.ios16se.build.get_ipsw_path", side_effect=inputs[:2] * 4),
                 patch("src.ios16se.img4_tool.get_img4_tool"),
+                patch("src.ios16se.firmware.verify", wraps=verify) as verify_ipsw,
             ):
                 self.assertEqual(cli.doctor(), 0)
+                verify_ipsw.assert_not_called()
+                self.assertEqual(cli.doctor(verify_firmware=True), 1)
+                self.assertEqual(
+                    [call.args for call in verify_ipsw.call_args_list],
+                    [(root / inputs[0], "target-ios15"), (root / inputs[1], "donor-ipados16")],
+                )
                 (root / inputs[-1]).write_bytes(b"")
                 self.assertEqual(cli.doctor(), 1)
                 (root / inputs[-1]).write_bytes(b"test")
@@ -116,5 +124,9 @@ class DiagnosticsTests(unittest.TestCase):
         ):
             cli.main()
         capture.assert_called_once_with(wait=7, port=2233)
-        with patch.object(sys, "argv", ["cli", "doctor"]), patch.object(cli, "doctor", return_value=1):
+        with (
+            patch.object(sys, "argv", ["cli", "doctor", "--verify-firmware"]),
+            patch.object(cli, "doctor", return_value=1) as doctor,
+        ):
             self.assertEqual(cli.main(), 1)
+        doctor.assert_called_once_with(verify_firmware=True)
