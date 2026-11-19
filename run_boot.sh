@@ -70,10 +70,8 @@ echo "[✓] All IPSWs present"
 # 3. Run the unified Python boot script
 if [ "$BOOT_FLAG" = "--boot" ]; then
     python3 run_n69_ios16_boot.py --im4m "$IM4M" --mode "$MODE" --boot
+    echo "Boot commands sent. Check device output for kernel startup."
 else
     python3 run_n69_ios16_boot.py --im4m "$IM4M" --mode "$MODE" --build-only
+    echo "Build completed in build-only mode."
 fi
-
-echo "=========================================="
-echo "BOOT SEQUENCE COMPLETED"
-echo "=========================================="

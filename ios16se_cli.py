@@ -5,7 +5,7 @@ iOS 16 SE Tethered Boot CLI — unified pipeline with serial capture.
 Commands:
   build       Build all boot images (iBSS, iBEC, DT, TC, SEP, KC)
   boot        Send images to device in DFU mode (gaster pwn → iBSS → iBEC → DT → TC → SEP → KC → bootx)
-  boot-capture  Boot + capture kernel logs via SSH after bootx
+  boot-capture  Capture SSH and USB device diagnostics after the host sends bootx
   logs        Capture device state after bootx (USB, irecovery, pairing, SSH, panic reports)
   status      Show build status and device info
   doctor      Verify host tools and firmware
@@ -25,6 +25,7 @@ import socket
 import threading
 from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -102,18 +103,22 @@ def get_iproxy() -> Path:
     return find_tool("iproxy")
 
 
-def check_device() -> bool:
-    """Verify device is N69AP in DFU mode."""
+def read_device_probe() -> str:
+    """Return the existing recovery query for the N69AP device."""
     try:
         r = run([str(get_irecovery()), "-q"], capture=True, check=False)
         out = r.stdout.decode(errors="replace")
         if "n69ap" not in out.lower():
             say(f"Device is not N69AP in DFU mode:\n{out}", "error")
-            return False
-        return True
+            return ""
+        return out
     except Exception as e:
         say(f"Error checking device: {e}", "error")
-        return False
+        return ""
+
+
+def check_device() -> bool:
+    return bool(read_device_probe())
 
 
 def is_pwnd() -> bool:
@@ -249,7 +254,8 @@ def boot_device(args, capture_logs: bool = False):
     """Execute full boot sequence."""
     build_images(args.mode, args.im4m)
 
-    if not check_device():
+    probe = read_device_probe()
+    if not probe:
         sys.exit(1)
 
     images = {
@@ -302,10 +308,12 @@ def boot_device(args, capture_logs: bool = False):
     say("Boot sequence sent. Device boot remains unverified.", "info")
 
     if capture_logs:
-        return capture_kernel_logs(port=args.port, max_wait=args.wait)
+        return capture_kernel_logs(port=args.port, max_wait=args.wait, recovery_probe=probe)
 
 
 SSH_COMMANDS = (
+    "uname -rv",
+    "sysctl kern.osversion kern.boottime",
     "sw_vers",
     "mount",
     "cat /cores/*.paniclog 2>/dev/null | head -200",
@@ -333,6 +341,7 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
                     try:
                         code, out, err = ssh_exec(port, "echo SSH_OK", timeout=min(5, remaining))
                         if code == 0 and out.strip() == "SSH_OK":
+                            log.write(f"{datetime.now(timezone.utc).isoformat()} SSH probe replied\n")
                             break
                         log.write(f"SSH probe exited {code}\n{err}\n")
                     except subprocess.TimeoutExpired as error:
@@ -359,18 +368,26 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
             return False
 
 
-def capture_kernel_logs(port: int = 2222, max_wait: int = 180):
-    """Capture kernel logs via SSH after bootx."""
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    out_dir = Path(tempfile.mkdtemp(prefix="kernel-", dir=LOGS_DIR))
-    log_file = out_dir / "ssh.log"
-    connected = collect_ssh_logs(log_file, port, max_wait)
-    say(f"SSH diagnostics saved to {log_file}", "info" if connected else "warning")
+def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe: str = ""):
+    """Keep the boot-capture SSH exit status even if stock reports are available."""
+    from src.ios16se.sep import parse_irecovery_identity
+
+    try:
+        ecid, _ = parse_irecovery_identity(recovery_probe)
+    except ValueError:
+        ecid = None
+    connected = capture_logs(wait=max_wait, port=port, after_bootx=True, expected_ecid=ecid)
     return 0 if connected else 1
 
 
-def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: int = 10) -> str:
+def record_event(out_dir: Path, message: str) -> None:
+    with (out_dir / "timeline.log").open("a", encoding="utf-8") as timeline:
+        timeline.write(f"{datetime.now(timezone.utc).isoformat(timespec='milliseconds')} {message}\n")
+
+
+def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: float = 10) -> str | None:
     """Save one host diagnostic and keep collecting if the tool fails."""
+    record_event(out_dir, f"{filename} started")
     try:
         result = run(cmd, capture=True, check=False, timeout=timeout)
         out = result.stdout.decode(errors="replace")
@@ -378,62 +395,101 @@ def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: int = 
         report = out
         if err or result.returncode:
             report += f"\nExit status: {result.returncode}\n{err}"
+        outcome = f"exit {result.returncode}"
         if result.returncode:
-            out = ""
+            out = None
     except subprocess.TimeoutExpired as error:
-        out = ""
+        out = None
+        outcome = "timeout"
         report = format_timeout(error)
     except OSError as error:
-        out = ""
+        out = None
+        outcome = "unavailable"
         report = f"{error}\n"
     (out_dir / filename).write_text(report, encoding="utf-8")
+    record_event(out_dir, f"{filename} {outcome}")
     return out
 
 
-def capture_logs(wait: int = 180, port: int = 2222):
+def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False,
+                 expected_ecid: int | None = None) -> bool:
     """Collect available host and device diagnostics independently."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    out_dir = Path(tempfile.mkdtemp(prefix="capture-", dir=LOGS_DIR))
+    out_dir = Path(tempfile.mkdtemp(prefix="kernel-" if after_bootx else "capture-", dir=LOGS_DIR))
+    record_event(out_dir, "host returned from bootx; capture started" if after_bootx else "standalone capture started")
+    if not after_bootx:
+        if sys.platform == "darwin":
+            record_command(out_dir, "system-profiler-usb.txt", ["system_profiler", "SPUSBDataType"])
+        else:
+            record_command(out_dir, "lsusb.txt", ["lsusb"])
+        record_command(out_dir, "irecovery.txt", [str(get_irecovery()), "-q"])
 
-    if sys.platform == "darwin":
-        record_command(out_dir, "system-profiler-usb.txt", ["system_profiler", "SPUSBDataType"])
-    else:
-        record_command(out_dir, "lsusb.txt", ["lsusb"])
-    record_command(out_dir, "irecovery.txt", [str(get_irecovery()), "-q"])
-
-    initial_ids = record_command(out_dir, "idevice-id.txt", ["idevice_id", "-l"]).split()
-    if len(initial_ids) == 1:
+    deadline = time.monotonic() + wait
+    initial = record_command(out_dir, "idevice-id.txt", ["idevice_id", "-l"], timeout=min(wait, 3))
+    initial_ids = (initial or "").split()
+    if len(initial_ids) == 1 and not after_bootx:
         record_command(out_dir, "device-info.txt", ["ideviceinfo", "-u", initial_ids[0]])
         record_command(out_dir, "pairing.txt", ["idevicepair", "-u", initial_ids[0], "validate"])
 
+    connected = False
     if len(initial_ids) > 1:
         (out_dir / "ssh.log").write_text("Multiple devices connected. SSH capture skipped.\n",
                                          encoding="utf-8")
-    elif not collect_ssh_logs(out_dir / "ssh.log", port, wait):
-        say("SSH unavailable. See ssh.log for details.", "warning")
+        record_event(out_dir, "SSH skipped: multiple visible devices")
+    else:
+        record_event(out_dir, "SSH collection started")
+        connected = collect_ssh_logs(out_dir / "ssh.log", port, wait)
+        record_event(out_dir, "SSH collection completed" if connected else "SSH unavailable")
+        if not connected:
+            say("SSH unavailable. See ssh.log for details.", "warning")
 
     # After a restart the phone may first become visible to lockdownd while we
     # are waiting for SSH. Keep the two observations separate.
-    final_ids = record_command(out_dir, "idevice-id-after.txt", ["idevice_id", "-l"]).split()
+    while True:
+        final = record_command(out_dir, "idevice-id-after.txt", ["idevice_id", "-l"], timeout=3)
+        final_ids = (final or "").split()
+        if final is not None:
+            record_event(out_dir, f"usbmux observation: {len(final_ids)} visible device(s)")
+        remaining = deadline - time.monotonic()
+        if not after_bootx or connected or remaining <= 0:
+            break
+        if final is None or final_ids or len(initial_ids) > 1:
+            break
+        time.sleep(min(2, remaining))
     reason = ""
-    if len(final_ids) != 1:
+    if (initial is None and expected_ecid is None) or final is None:
+        reason = "Device enumeration failed. Cannot verify the source of crash reports."
+    elif len(final_ids) != 1:
         reason = "No unique device visible after SSH capture."
     elif initial_ids and initial_ids != final_ids:
         reason = "The connected device list changed. Crash report source is ambiguous."
     else:
         udid = final_ids[0]
         info = record_command(out_dir, "device-info-after.txt", ["ideviceinfo", "-u", udid])
-        if "ProductType: iPhone8,4" not in info.splitlines():
+        if "ProductType: iPhone8,4" not in (info or "").splitlines():
             reason = "Could not confirm iPhone SE (iPhone8,4) after SSH capture."
+        elif after_bootx:
+            chip_ids = [line.removeprefix("UniqueChipID: ").strip()
+                        for line in info.splitlines() if line.startswith("UniqueChipID: ")]
+            try:
+                observed_ecid = int(chip_ids[0], 0) if len(chip_ids) == 1 else None
+            except ValueError:
+                observed_ecid = None
+            if expected_ecid is None or observed_ecid != expected_ecid:
+                reason = "Cannot match the returned SE to the device observed before this boot attempt."
+            else:
+                record_event(out_dir, "device-info-after.txt matches pre-boot ECID")
     if reason:
         (out_dir / "crash-report.txt").write_text(reason + "\n", encoding="utf-8")
     else:
         destination = out_dir / "crash"
         destination.mkdir()
+        record_event(out_dir, "copying stored reports; correlate individual report times and OS builds with this capture")
         record_command(out_dir, "crash-report.txt",
                        ["idevicecrashreport", "-u", udid, "-k", str(destination)], timeout=120)
 
     say(f"Diagnostics saved to {out_dir}", "info")
+    return connected
 
 
 def doctor(*, verify_firmware: bool = False):
@@ -575,7 +631,7 @@ Examples:
     boot_parser.add_argument("--im4m", type=Path, help="Path to IM4M.bin (default: state/IM4M.bin)")
 
     # Boot-capture command
-    boot_cap = sub.add_parser("boot-capture", help="Boot device and capture kernel logs via SSH")
+    boot_cap = sub.add_parser("boot-capture", help="Capture SSH diagnostics and reports from the returning SE")
     boot_cap.add_argument("--mode", choices=["full", "minimal", "safe-minimal"], default="full",
                           help="Build mode (default: full)")
     boot_cap.add_argument("--im4m", type=Path, help="Path to IM4M.bin (default: state/IM4M.bin)")

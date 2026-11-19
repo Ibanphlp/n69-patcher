@@ -1,4 +1,5 @@
 import contextlib
+from datetime import datetime, timedelta
 import io
 import subprocess
 import sys
@@ -170,3 +171,61 @@ class DiagnosticsTests(unittest.TestCase):
         ):
             self.assertEqual(cli.main(), 1)
         doctor.assert_called_once_with(verify_firmware=True)
+
+    def test_post_boot_capture_records_stock_return_after_ssh_failure(self):
+        # The host sees no usbmux device at first. SSH exits early, then the
+        # same test phone becomes visible to the host under stock iOS.
+        with tempfile.TemporaryDirectory() as directory:
+            observations = iter(["", "", "se"])
+            now = [0.0]
+            commands = []
+
+            def host(cmd, **kwargs):
+                commands.append(cmd)
+                out = ""
+                if cmd[0] == "idevice_id":
+                    out = next(observations)
+                if cmd[0] == "ideviceinfo":
+                    out = "ProductType: iPhone8,4\nProductVersion: 15.8.8\nBuildVersion: 19H422\nUniqueChipID: 123\n"
+                return subprocess.CompletedProcess(cmd, 0, out.encode(), b"")
+
+            with (
+                patch.object(cli, "LOGS_DIR", Path(directory)),
+                patch.object(cli, "run", side_effect=host),
+                patch.object(cli, "collect_ssh_logs", return_value=False),
+                patch.object(cli.time, "monotonic", side_effect=lambda: now[0]),
+                patch.object(cli.time, "sleep", side_effect=lambda t: now.__setitem__(0, now[0] + t)),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                probe = "ECID: 0x7b\nCPID: 0x8000\n"
+                self.assertEqual(cli.capture_kernel_logs(port=2233, max_wait=5, recovery_probe=probe), 1)
+            report = next(Path(directory).iterdir())
+            self.assertTrue((report / "device-info-after.txt").is_file(), "stock reappearance was lost")
+            self.assertIn("19H422", (report / "device-info-after.txt").read_text())
+            self.assertIn(["idevicecrashreport", "-u", "se", "-k", str(report / "crash")], commands)
+            events = (report / "timeline.log").read_text().splitlines()
+            self.assertIn("host returned from bootx", events[0])
+            self.assertTrue(any("SSH unavailable" in event for event in events))
+            self.assertTrue(any("device-info-after.txt" in event for event in events))
+            for event in events:
+                self.assertEqual(datetime.fromisoformat(event.split()[0]).utcoffset(), timedelta(0))
+
+    def test_post_boot_capture_skips_reports_from_another_se(self):
+        def host(cmd, **kwargs):
+            outputs = {
+                "idevice_id": b"se",
+                "ideviceinfo": b"ProductType: iPhone8,4\nUniqueChipID: 124\n",
+            }
+            return subprocess.CompletedProcess(cmd, 0, outputs[cmd[0]], b"")
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(cli, "LOGS_DIR", Path(directory)),
+            patch.object(cli, "run", side_effect=host),
+            patch.object(cli, "collect_ssh_logs", return_value=False),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            cli.capture_kernel_logs(max_wait=1, recovery_probe="ECID: 0x7b\nCPID: 0x8000\n")
+            report = next(Path(directory).iterdir())
+            self.assertFalse((report / "crash").exists())
+            self.assertIn("Cannot match", (report / "crash-report.txt").read_text())
