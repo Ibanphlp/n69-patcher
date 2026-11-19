@@ -55,6 +55,35 @@ esac
 
 
 class ApfsDiagnosticsTests(unittest.TestCase):
+    def test_preboot_fallback_never_copies_an_ambiguous_sep(self):
+        script = r"""
+source "$1/stage.sh"
+PREBOOT_MNT="$2"
+rsh() { bash -c "${1//\/mnt6\/usr\/standalone\/firmware\//\"\$DESTINATION\"}"; }
+copy_unique_preboot_sep
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            preboot = Path(directory) / "preboot"
+            destination = Path(directory) / "destination"
+            destination.mkdir()
+            for count in range(3):
+                with self.subTest(candidates=count):
+                    if count:
+                        candidate = preboot / f"firmware {count}" / "usr/standalone/firmware/sep-firmware.img4"
+                        candidate.parent.mkdir(parents=True)
+                        candidate.write_bytes(bytes([count]))
+                    installed = destination / "sep-firmware.img4"
+                    installed.write_bytes(b"original")
+                    result = subprocess.run(
+                        ["bash", "-c", script, "test-preboot", str(LIB), str(preboot)],
+                        env={**os.environ, "DESTINATION": str(destination)},
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(result.returncode, int(count != 1), result.stderr)
+                    self.assertEqual(installed.read_bytes(), b"\x01" if count == 1 else b"original")
+                    if count == 2:
+                        self.assertIn("Multiple SEP firmware files", result.stderr)
+
     def test_volume_preflight_preserves_recovery_and_validates_volume_identity(self):
         cases = {
             "correct-role": None,

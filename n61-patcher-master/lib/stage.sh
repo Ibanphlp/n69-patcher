@@ -500,6 +500,21 @@ resolve_stock_data_slot() {
 }
 
 # ---------- finish（rootfs.finish）----------
+copy_unique_preboot_sep() {
+    rsh "
+        set --
+        for f in '${PREBOOT_MNT:-/mnt8}'/*/usr/standalone/firmware/sep-firmware.img4; do
+            [ -f \"\$f\" ] || continue
+            set -- \"\$@\" \"\$f\"
+        done
+        case \"\$#\" in
+            0) echo 'No SEP firmware file found in Preboot.' >&2; exit 1 ;;
+            1) /bin/cp -a \"\$1\" /mnt6/usr/standalone/firmware/ ;;
+            *) echo 'Multiple SEP firmware files found in Preboot. Refusing to copy.' >&2; exit 1 ;;
+        esac
+    "
+}
+
 # SevenUP: the new system is selected with rd=, and the phone's existing Data
 # volume keeps its systembag. No ramdisk SEP, no new systembag, no role move
 # of the iOS 15 System or Data volumes.
@@ -514,8 +529,7 @@ stage_finish_shared_data() {
     rsh "mkdir -p /mnt6/usr/standalone/firmware"
     if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
         preboot_mount
-        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
-            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+        copy_unique_preboot_sep || die "Could not copy an unambiguous SEP firmware file from Preboot."
     else
         rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
     fi
@@ -581,8 +595,7 @@ stage_finish() {
     rsh "mkdir -p /mnt6/usr/standalone/firmware"
     if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
         preboot_mount
-        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
-            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+        copy_unique_preboot_sep || die "Could not copy an unambiguous SEP firmware file from Preboot."
     else
         rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
     fi
