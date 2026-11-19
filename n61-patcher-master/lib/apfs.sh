@@ -488,7 +488,13 @@ mount_data_b() {
 apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
     local spec="$1" write="$2" pair idx role i name paddr blk old tmp bak readback
     local mnts used_roles="" stamp
+    if [ "${T_NAME:-}" = "n69-ios16" ] && [ "$write" -eq 1 ]; then
+        apfs_cleanup
+    fi
     apfs_volumes
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        guard_target_slot "$T_MNT_SYSTEM_B" "${T_VOL_CREATE%% *}"
+    fi
     # 旧系统（iOS15 的 SystemA/DataA）已占用 System/Data role 时，iOS16 靠 role 找 Data 卷，
     # 必须把旧持有者降为 role 0；仅在清单显式设置 T_ROLES_DEMOTE_OLD=1 时执行（每个块先备份）。
     local demoted="" spec_idx="" prole pidx
@@ -585,12 +591,19 @@ apfs_block_name() {   # blockfile
 }
 
 guard_target_slot() {   # slice expected_name
-    local idx="$1" expected="$2" block name
+    local idx="$1" expected="$2" block name role
     block="${APFS_V_BLOCK[$idx]:-}"
     [ -n "$block" ] || die "APFS s$idx is missing from the volume inventory."
     apfs_checksum_ok "$block" || die "APFS s$idx has an invalid checksum."
     name="$(apfs_block_name "$block")" || die "Could not read the APFS s$idx name."
     [ "$name" = "$expected" ] || die "APFS s$idx is '$name', expected '$expected'."
+    if [ "${T_NAME:-}" = "n69-ios16" ]; then
+        role="$(rd_u16 "$block" "$APFS_ROLE_OFF")" || die "Could not read the APFS s$idx role."
+        case "$idx:$role" in
+            "$T_MNT_SYSTEM_B:0"|"$T_MNT_SYSTEM_B:4"|"$T_MNT_DATA_B:0") ;;
+            *) die "APFS s$idx '$name' has unexpected role $role. Refusing to modify this volume." ;;
+        esac
+    fi
 }
 
 guard_n69_recovery_role() (

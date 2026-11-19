@@ -18,10 +18,13 @@ data_is_encrypted() { return 1; }
 apfs_vol_exists() { [ -n "${APFS_V_BLOCK[$1]:-}" ]; }
 apfs_create_volumes() { return 0; }
 rsh_timeout() { die "Reached a device write"; }
+log() { :; }
+rsh() { :; }
 T_NAME=n69-ios16
 T_MNT_SYSTEM_B=8
 T_MNT_DATA_B=9
 T_VOL_CREATE="SystemB DataB"
+T_ROLES="8:0x4"
 
 make_block() {
     local idx="$1" role="$2" name="$3" block="$TMPDIR/s$1.bin"
@@ -40,6 +43,14 @@ make_block 2 64 Data
 make_block 8 4 SystemB
 case "$2" in
     correct-role) stage_volumes ;;
+    original-reported-layout) make_block 8 0 SystemB; stage_volumes ;;
+    unexpected-system-role) make_block 8 1 SystemB; stage_set_roles ;;
+    wrong-role-target) make_block 8 0 Other; stage_set_roles ;;
+    active-data)
+        make_block 9 64 DataB
+        OPT_RECREATE_DATA=1
+        stage_volumes
+        ;;
     foreign-recovery) make_block 3 4 Recovery; stage_volumes ;;
     wrong-name)
         make_block 9 0 Other
@@ -87,6 +98,10 @@ copy_unique_preboot_sep
     def test_volume_preflight_preserves_recovery_and_validates_volume_identity(self):
         cases = {
             "correct-role": None,
+            "original-reported-layout": None,
+            "unexpected-system-role": "'SystemB' has unexpected role 1",
+            "wrong-role-target": "expected 'SystemB'",
+            "active-data": "'DataB' has unexpected role 64",
             "foreign-recovery": "s3 already holds the Recovery role",
             "wrong-name": "expected 'DataB'",
             "bad-checksum": "s8 has an invalid checksum",
