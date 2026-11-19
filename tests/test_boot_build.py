@@ -134,6 +134,53 @@ class BuildTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             apply_patches(Path('x'), ['sep_legacy'], Path('x'))
 
+    def _fake_patcher(self, root, emit_ios15=False):
+        tool = root / "Kernel64Patcher3"
+        lines = [
+            "x: Patching AMFI at 0x1",
+            'x: Patching "%s::%s() Performing img4 validation outside of workloop" at 0x2',
+            "[+] Patched Img4DecodeGetPropertyData",
+            "x: Patching is_root_hash_authentication_required_ios at 0x3",
+            "x: Patching developer mode at 0x4",
+        ]
+        if emit_ios15:
+            lines.append("ios 15 Detected!")
+        body = "#!/bin/sh\ncp \"$1\" \"$2\"\n" + "".join(f"echo '{l}'\n" for l in lines)
+        tool.write_text(body)
+        tool.chmod(0o755)
+        return tool
+
+    def test_generic_security_omits_ios15_only_flag(self):
+        from ios16se.kc_patch import GenericSecurityPatch
+        self.assertNotIn("-e", GenericSecurityPatch.FLAGS)
+        self.assertNotIn("-e", GenericSecurityPatch.EXPECT)
+        self.assertIn("-h", GenericSecurityPatch.FLAGS)
+
+    def test_generic_security_applies_ios16_flags(self):
+        from ios16se.kc_patch import GenericSecurityPatch, PatchContext
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kernel = root / "kernel.raw"
+            kernel.write_bytes(b"A" * 4096)
+            tool = self._fake_patcher(root)
+            ctx = PatchContext(kernel, root / "work")
+            with patch.object(GenericSecurityPatch, "_find_tool", return_value=tool):
+                out = GenericSecurityPatch().apply(ctx)
+            self.assertTrue(out.is_file())
+            self.assertEqual(out.stat().st_size, kernel.stat().st_size)
+
+    def test_generic_security_fails_closed_on_ios15_detection(self):
+        from ios16se.kc_patch import GenericSecurityPatch, PatchContext
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            kernel = root / "kernel.raw"
+            kernel.write_bytes(b"A" * 4096)
+            tool = self._fake_patcher(root, emit_ios15=True)
+            ctx = PatchContext(kernel, root / "work")
+            with patch.object(GenericSecurityPatch, "_find_tool", return_value=tool):
+                with self.assertRaisesRegex(RuntimeError, "ios 15 Detected"):
+                    GenericSecurityPatch().apply(ctx)
+
     def test_watchtower_refuses_guessed_tail(self):
         with self.assertRaises(ValueError): extract_watchtower_tail(b'X'*100000)
 
