@@ -48,13 +48,15 @@ class DiagnosticsTests(unittest.TestCase):
         def host_run(cmd, **kwargs):
             if cmd[0] == "lsusb":
                 raise FileNotFoundError("lsusb")
+            if cmd[0] == "idevice_id":
+                raise subprocess.TimeoutExpired(cmd, 10, b"partial-id", b"host error")
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
 
         def ssh(port, command, timeout=10):
             if command == "echo SSH_OK":
                 return 0, "SSH_OK", ""
             if command == "mount":
-                raise subprocess.TimeoutExpired(command, timeout)
+                raise subprocess.TimeoutExpired(command, timeout, b"mount output", b"SSH error")
             return 0, f"result for {command}", ""
 
         with tempfile.TemporaryDirectory() as logs, contextlib.redirect_stdout(io.StringIO()):
@@ -69,10 +71,16 @@ class DiagnosticsTests(unittest.TestCase):
             report = next(Path(logs).iterdir())
             self.assertIn("lsusb", (report / "lsusb.txt").read_text())
             self.assertTrue((report / "irecovery.txt").is_file())
+            host_log = (report / "idevice-id.txt").read_text()
+            self.assertIn("partial-id", host_log)
+            self.assertIn("host error", host_log)
+            self.assertFalse((report / "device-info.txt").exists())
             ssh_log = (report / "ssh.log").read_text()
             self.assertIn("result for sw_vers", ssh_log)
             self.assertIn("=== mount ===", ssh_log)
             self.assertIn("timed out", ssh_log)
+            self.assertIn("mount output", ssh_log)
+            self.assertIn("SSH error", ssh_log)
             self.assertIn("result for dmesg", ssh_log)
             forward.assert_called_once_with(2233, startup_timeout=3)
             self.assertLessEqual(ssh_exec.call_args_list[0].kwargs["timeout"], 3)

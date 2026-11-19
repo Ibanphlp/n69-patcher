@@ -315,6 +315,15 @@ SSH_COMMANDS = (
 )
 
 
+def format_timeout(error: subprocess.TimeoutExpired) -> str:
+    report = f"{error}\n"
+    if error.stdout:
+        report += f"Partial stdout:\n{error.stdout.decode(errors='replace')}\n"
+    if error.stderr:
+        report += f"Partial stderr:\n{error.stderr.decode(errors='replace')}\n"
+    return report
+
+
 def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
     """Wait for SSH and record each diagnostic result in the same log."""
     deadline = time.monotonic() + wait
@@ -327,8 +336,8 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
                         if code == 0 and out.strip() == "SSH_OK":
                             break
                         log.write(f"SSH probe exited {code}\n{err}\n")
-                    except subprocess.TimeoutExpired:
-                        log.write("SSH probe timed out\n")
+                    except subprocess.TimeoutExpired as error:
+                        log.write(f"SSH probe: {format_timeout(error)}")
                     time.sleep(max(0, min(2, deadline - time.monotonic())))
                 else:
                     log.write("Timed out waiting for SSH\n")
@@ -341,7 +350,9 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
                         log.write(f"Exit status: {code}\n{out}\n")
                         if err:
                             log.write(f"stderr:\n{err}\n")
-                    except (OSError, subprocess.TimeoutExpired) as error:
+                    except subprocess.TimeoutExpired as error:
+                        log.write(format_timeout(error))
+                    except OSError as error:
                         log.write(f"{error}\n")
                 return True
         except (OSError, RuntimeError) as error:
@@ -368,7 +379,10 @@ def record_command(out_dir: Path, filename: str, cmd: list[str]) -> str:
         report = out
         if err or result.returncode:
             report += f"\nExit status: {result.returncode}\n{err}"
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired as error:
+        out = ""
+        report = format_timeout(error)
+    except OSError as error:
         out = ""
         report = f"{error}\n"
     (out_dir / filename).write_text(report, encoding="utf-8")
