@@ -1,4 +1,5 @@
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -73,15 +74,38 @@ class BuildTests(unittest.TestCase):
             work = p/'decrypt'; work.mkdir(); (work/'iBSS.patched').write_bytes(b'old')
             (work/'iBEC.dec').write_bytes(b'old')
             calls = []
-            def gaster(_tool, args):
-                calls.append(args[1]); Path(args[2]).write_bytes(Path(args[1]).read_bytes())
-            def patch_ibss(cmd, _label): Path(cmd[2]).write_bytes(Path(cmd[1]).read_bytes()+b' patched')
-            with patch('ios16se.build.check_device_pwned'), patch('ios16se.build.run_gaster', side_effect=gaster), patch('ios16se.build.run_checked', side_effect=patch_ibss):
+            def fake_checked(cmd, _label):
+                if cmd[1] == 'decrypt':
+                    calls.append(cmd[2])
+                    Path(cmd[3]).write_bytes(Path(cmd[2]).read_bytes())
+                else:
+                    Path(cmd[2]).write_bytes(Path(cmd[1]).read_bytes() + b' patched')
+            with patch('ios16se.build.check_device_pwned'), patch('ios16se.build.run_checked', side_effect=fake_checked):
                 a,b = decrypt_iboot(ibss, ibec, work, tool, tool, 'n69ap', tool)
                 self.assertEqual(calls, [str(ibss),str(ibec)])
                 self.assertNotEqual(a.read_bytes(), b.read_bytes())
                 decrypt_iboot(ibss, ibec, work, tool, tool, 'n69ap', tool)
                 self.assertEqual(len(calls), 2)
+
+    def test_first_tool_failure_is_reported_without_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ibss, ibec, tool = (root / name for name in ('ibss', 'ibec', 'tool'))
+            for file in (ibss, ibec, tool):
+                file.write_bytes(file.name.encode())
+            for stage, successful in (('iBSS', 0), ('iBEC', 1)):
+                with self.subTest(stage=stage):
+                    result = subprocess.CompletedProcess([], 7, 'usb_timeout: 5\nECID: 123456',
+                                                         'cannot write output')
+                    responses = [subprocess.CompletedProcess([], 0, '', '')] * successful + [result]
+                    with patch('ios16se.build.check_device_pwned'), \
+                         patch('ios16se.build.subprocess.run', side_effect=responses) as run, \
+                         self.assertRaises(BuildError) as error:
+                        decrypt_iboot(ibss, ibec, root / 'work', tool, tool, 'n69uap', tool)
+                    self.assertEqual(run.call_count, successful + 1)
+                    self.assertEqual(str(error.exception),
+                                     f'{stage} decrypt failed (exit 7)\nstderr: cannot write output'
+                                     '\nstdout: usb_timeout: 5\nECID: [redacted]')
 
     def test_devicetree_inspects_im4p_and_rejects_invalid_inputs(self):
         def der(tag, data):
