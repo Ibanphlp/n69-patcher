@@ -171,21 +171,32 @@ from .kc_patch_drivers import (
 class GenericSecurityPatch(KernelPatch):
     name = "generic_security"
     description = "Apply generic iOS 16 kernel security patches"
-    # Kernel64Patcher3 flags for an iOS 16 arm64 (A9) kernel. Each was verified to
-    # locate its target in the iPad 16.7.16 (20H392) kernel:
-    #   -a AMFI                  -f AppleFirmwareUpdate img4 check
-    #   -w image4 validation cb  -h root hash authentication (iOS 16)
-    #   -e root volume seal broken   -d developer mode
-    FLAGS = ["-a", "-f", "-w", "-h", "-e", "-d"]
+    # Kernel64Patcher3 flags for the iOS 16 arm64 (A9) 20H392 kernel. Only flags
+    # the tool's own usage marks as applicable to iOS 16 are used:
+    #   -a AMFI                        (all versions)
+    #   -f AppleFirmwareUpdate img4    (all versions)
+    #   -w image4 validation callback  (iOS 15+)
+    #   -h is_root_hash_authentication_required_ios  (iOS 16 only)
+    #   -d developer mode              (all versions)
+    # NOT used on 20H392: -e (root volume seal) is "iOS 15 Only" per the tool,
+    # as are -r (RootVPNotAuthenticatedAfterMounting) and -o (root hash). This
+    # tool has no iOS 16 flag for the APFS rootvp/seal sites, so those must be
+    # byte-patched against the real 20H392 kernelcache (as SevenUP does by hand
+    # for its 20B82 kernel in kernel_base.rootful); -h is the only iOS 16
+    # root-mount protection this tool can apply.
+    FLAGS = ["-a", "-f", "-w", "-h", "-d"]
     # Log line each flag prints when it really patched something.
     EXPECT = {
         "-a": "Patching AMFI at",
         "-f": "Patching \"%s::%s() Performing img4 validation",
         "-w": "[+] Patched Img4DecodeGetPropertyData",
         "-h": "Patching is_root_hash_authentication_required_ios at",
-        "-e": "Patched tbnz at",
         "-d": "Patching developer mode at",
     }
+    # Kernel64Patcher3 prints this when a flag matched an iOS 15 code path.
+    # On the iOS 16 20H392 kernel that means a wrong kernel or a misapplied
+    # iOS 15 flag, so fail closed rather than ship a mis-patched kernel.
+    IOS15_MARKER = "ios 15 Detected!"
 
     @staticmethod
     def _find_tool() -> Path:
@@ -207,6 +218,11 @@ class GenericSecurityPatch(KernelPatch):
         log = (r.stdout or "") + (r.stderr or "")
         if r.returncode != 0 or not out.exists():
             raise RuntimeError(f"Kernel64Patcher3 failed (rc={r.returncode}):\n{log[-800:]}")
+        if self.IOS15_MARKER in log:
+            raise RuntimeError(
+                "generic_security: patcher reported 'ios 15 Detected!' on a kernel "
+                "that must be iOS 16 (20H392); refusing to ship a mis-patched kernel.\n"
+                f"{log[-800:]}")
         missing = [f for f, text in self.EXPECT.items() if text not in log]
         if missing:
             raise RuntimeError(
