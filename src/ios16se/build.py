@@ -90,12 +90,18 @@ def selected_identity(config: BuildConfig):
 
 
 def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> None:
-    """Ensure a device matching `board` is connected and pwned in DFU mode.
+    """Verify the connected DFU device matches `board` and leave it clean.
 
-    `gaster decrypt` is a device-bound operation: it sends the iBSS/iBEC
-    KBAG to the target's AES engine via checkm8 and reads back the plaintext.
-    Without a connected, pwned device it exits non-zero and the build crashes
-    with a bare ``CalledProcessError``. Fail fast with a clear message instead.
+    `gaster decrypt` is a device-bound operation: it sends the iBSS/iBEC KBAG
+    to the target's AES engine via checkm8 and reads back the plaintext. It
+    runs the checkm8 exploit *itself* (``gaster_decrypt_file`` always calls
+    ``gaster_checkm8``), so the build must NOT pre-pwn the device: a second
+    checkm8 on an already-exploited A9 (CPID 0x8003/0x8000) leaves the AES
+    trampoline in an inconsistent state and the exec round-trip hangs, which
+    shows up as the decrypt exiting 1 right after "Now you can boot untrusted
+    images." We therefore only confirm identity here and make sure the device
+    is in a clean (un-pwned) DFU state, so `gaster decrypt`'s single exploit
+    runs from a known-good start.
     """
     probe = subprocess.run([str(irecovery_bin), "-q"], capture_output=True, text=True)
     output = (probe.stdout or "") + (probe.stderr or "")
@@ -111,19 +117,13 @@ def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> Non
             f"Device MODEL is {identity.model} ({identity.cpid_text}), not {board}. "
             f"Refusing a Samsung artifact set on a TSMC phone and the reverse."
         )
-    if "PWND" not in output:
-        print(f"  Device not pwned, running gaster pwn...")
-        subprocess.run([str(gaster_bin), "pwn"], check=True, capture_output=False)
-        subprocess.run([str(gaster_bin), "reset"], check=True, capture_output=False)
+    if "PWND" in output:
+        # A prior exploit is still resident. Return to clean DFU so the
+        # decrypt's own checkm8 is the only one that runs; otherwise it is a
+        # double-exploit and the AES exec step fails.
+        print("  Device already pwned; resetting to clean DFU before decrypt...")
+        subprocess.run([str(gaster_bin), "reset"], check=False, capture_output=False)
         time.sleep(2)
-        # Re-check after pwn
-        probe = subprocess.run([str(irecovery_bin), "-q"], capture_output=True, text=True)
-        output = (probe.stdout or "") + (probe.stderr or "")
-        if "PWND" not in output:
-            raise BuildError(
-                f"Device did not reach pwned DFU after 'gaster pwn' "
-                f"(irecovery -q output: {output.strip()!r})."
-            )
 
 
 def _tool_diagnostic(text: str) -> str:

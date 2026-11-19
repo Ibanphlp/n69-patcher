@@ -15,6 +15,42 @@ from ios16se.sevenup.kc import plist
 from ios16se.append_wt_fix import extract_watchtower_tail
 
 class BuildTests(unittest.TestCase):
+    def test_check_device_never_pre_pwns_before_gaster_decrypt(self):
+        # gaster decrypt runs checkm8 itself; a second pre-pwn on A9 breaks the
+        # AES exec. check_device_pwned must verify identity and never 'pwn'.
+        from ios16se.build import check_device_pwned
+        n69uap_probe = "CPID: 0x8003\nMODEL: n69uap\n"
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append([str(c) for c in cmd])
+            if "-q" in cmd:
+                return SimpleNamespace(stdout=n69uap_probe, stderr="", returncode=0)
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        with patch('ios16se.build.subprocess.run', side_effect=fake_run):
+            check_device_pwned(Path('irecovery'), Path('gaster'), 'n69uap')
+        gaster_verbs = [c[1] for c in calls if c and c[0] == 'gaster' and len(c) > 1]
+        self.assertNotIn('pwn', gaster_verbs)
+
+    def test_check_device_resets_clean_when_already_pwned(self):
+        from ios16se.build import check_device_pwned
+        probe = "CPID: 0x8003\nMODEL: n69uap\nPWND:[checkm8]\n"
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append([str(c) for c in cmd])
+            if "-q" in cmd:
+                return SimpleNamespace(stdout=probe, stderr="", returncode=0)
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+        with patch('ios16se.build.subprocess.run', side_effect=fake_run), \
+                patch('ios16se.build.time.sleep'):
+            check_device_pwned(Path('irecovery'), Path('gaster'), 'n69uap')
+        gaster_verbs = [c[1] for c in calls if c and c[0] == 'gaster' and len(c) > 1]
+        self.assertIn('reset', gaster_verbs)
+        self.assertNotIn('pwn', gaster_verbs)
+
     def test_img4_preflight_stops_before_device_on_ticket_mismatch(self):
         import os
         import subprocess
