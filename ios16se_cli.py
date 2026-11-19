@@ -68,7 +68,10 @@ def run(cmd, check=True, capture=False, timeout=120, live=False, env=None):
             pass
         finally:
             os.close(master)
-        return proc.wait()
+        rc = proc.wait()
+        if check and rc != 0:
+            raise subprocess.CalledProcessError(rc, cmd, out)
+        return rc
     if capture:
         r = subprocess.run(cmd, capture_output=True, timeout=timeout, env=e)
         if check and r.returncode != 0:
@@ -231,8 +234,8 @@ def ssh_exec(port: int, command: str, timeout: float = 10) -> tuple[int, str, st
     return r.returncode, r.stdout.decode(errors="replace"), r.stderr.decode(errors="replace")
 
 
-def build_images(mode: str = "full", im4m: Optional[Path] = None):
-    """Build all boot images."""
+def build_images(mode: str = "full", im4m: Optional[Path] = None, board: str = "n69ap"):
+    """Build all boot images for `board` (n69ap = Samsung, n69uap = TSMC)."""
     if im4m is None:
         im4m = STATE_DIR / "IM4M.bin"
     if not im4m.exists():
@@ -245,7 +248,7 @@ def build_images(mode: str = "full", im4m: Optional[Path] = None):
         run([
             sys.executable, "-m", "src.ios16se.build",
             str(SCRIPT_DIR / "profiles" / "n69ap_ios16.toml"),
-            "--im4m", str(im4m)
+            "--im4m", str(im4m), "--board", board,
         ], check=True, live=True)
         say("Build complete", "success")
     except subprocess.CalledProcessError:
@@ -260,7 +263,7 @@ def boot_device(args, capture_logs: bool = False):
         initial = write_evidence(out_dir, None, None, None, {"requested_mode": args.mode, "question": getattr(args, "question", "donor-entry")}, complete=False)
         record_event(out_dir, "capture requested before build")
         say(f"Capture {initial['attempt_id']}: {out_dir}")
-    build_images(args.mode, args.im4m)
+    build_images(args.mode, args.im4m, getattr(args, "board", "n69ap"))
 
     probe = read_device_probe()
     if not probe:
@@ -652,6 +655,8 @@ Examples:
     build_parser.add_argument("--mode", choices=["full", "minimal", "safe-minimal"], default="full",
                               help="Build mode (default: full)")
     build_parser.add_argument("--im4m", type=Path, help="Path to IM4M.bin (default: state/IM4M.bin)")
+    build_parser.add_argument("--board", choices=["n69ap", "n69uap"], default="n69ap",
+                              help="Device board (n69uap for TSMC, CPID 0x8003)")
 
     # Boot command
     boot_parser = sub.add_parser("boot", help="Boot device (send images + bootx)")
@@ -666,6 +671,11 @@ Examples:
     boot_cap.add_argument("--im4m", type=Path, help="Path to IM4M.bin (default: state/IM4M.bin)")
     boot_cap.add_argument("--wait", type=int, default=180, help="Max wait for SSH (seconds)")
     boot_cap.add_argument("--port", type=int, default=2222, help="SSH forward port (default: 2222)")
+    # N69AP is Samsung (CPID 0x8000/0x8004); N69uAP is TSMC (CPID 0x8003). The
+    # artifact sets are not interchangeable, so the board must be selectable.
+    for board_parser in (boot_parser, boot_cap):
+        board_parser.add_argument("--board", choices=["n69ap", "n69uap"], default="n69ap",
+                                  help="Device board (n69uap for TSMC, CPID 0x8003)")
 
     # Logs command
     logs_parser = sub.add_parser("logs", help="Capture post-bootx device state")
@@ -700,7 +710,7 @@ Examples:
             parser.error("--port must be between 1 and 65535")
 
     if args.command == "build":
-        build_images(args.mode, args.im4m)
+        build_images(args.mode, args.im4m, args.board)
     elif args.command == "boot":
         boot_device(args)
     elif args.command == "boot-capture":

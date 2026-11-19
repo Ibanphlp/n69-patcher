@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -193,3 +194,25 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(report["capture_status"], "incomplete")
         self.assertIsNone(report["ssh_connected"])
         self.assertIn("host bootx return unknown", d.summary(report))
+
+
+class LiveRunFailureTests(unittest.TestCase):
+    """A failing live subprocess must not be reported as success.
+
+    build_images ran the builder with live=True; run() returned the exit code
+    without raising, so a BuildError (e.g. a n69uap phone against an n69ap
+    artifact set) printed "Build complete" and the caller then sent the stale
+    images from the previous build.
+    """
+
+    def test_live_run_raises_on_nonzero_exit(self):
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            cli.run([sys.executable, "-c", "import sys; sys.exit(3)"], live=True)
+        self.assertEqual(caught.exception.returncode, 3)
+
+    def test_live_run_returns_code_when_check_disabled(self):
+        self.assertEqual(cli.run([sys.executable, "-c", "import sys; sys.exit(3)"],
+                                 check=False, live=True), 3)
+
+    def test_live_run_succeeds_on_zero_exit(self):
+        self.assertEqual(cli.run([sys.executable, "-c", "pass"], live=True), 0)

@@ -828,11 +828,17 @@ def validate_boot_images(images) -> None:
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python -m ios16se.build <config.toml> [--im4m IM4M.bin] [--boot]")
+        print("Usage: python -m ios16se.build <config.toml> [--im4m IM4M.bin] [--board n69ap|n69uap] [--boot]")
         sys.exit(1)
 
-    config_path = Path("profiles/n69ap_ios16.toml")
+    config_path = Path(sys.argv[1])
     config = load_config(config_path)
+    if "--board" in sys.argv:
+        board = sys.argv[sys.argv.index("--board") + 1].lower()
+        if board not in ("n69ap", "n69uap"):
+            print(f"--board must be n69ap or n69uap, not {board}")
+            sys.exit(2)
+        config.target["board_config"] = board
 
     im4m_path = None
     if "--im4m" in sys.argv:
