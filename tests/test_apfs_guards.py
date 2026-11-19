@@ -9,6 +9,7 @@ LIB = Path(__file__).resolve().parents[1] / "n61-patcher-master" / "lib" / "apfs
 HARNESS = r"""
 set -uo pipefail
 source "$1"
+source "$(dirname "$1")/stage.sh"
 die() { printf '%s\n' "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
 ok() { log "$*"; }
@@ -34,6 +35,19 @@ make_block() {
     APFS_V_PADDR[$idx]="$((idx + 100))"
     APFS_V_BLOCK[$idx]="$blk"
 }
+
+if [ "$2" = preflight-conflict ]; then
+    dry() { return 1; }
+    preflight_install_inputs() { return 0; }
+    ssh_ensure() { return 0; }
+    data_is_encrypted() { die "Reached volume setup despite role conflict"; }
+    T_VOL_CREATE="SystemB DataB"
+    T_ROLES="8:0x1 9:0x40"
+    make_block 1 1 System
+    make_block 2 64 Data
+    stage_install
+    exit $?
+fi
 
 make_block 8 0 SystemB
 make_block 9 0 DataB
@@ -91,3 +105,10 @@ class ApfsGuardTests(unittest.TestCase):
                     (backup / f"block-{100 + index}-s{index}.bin").read_bytes(),
                     (work / f"s{index}.bin").read_bytes(),
                 )
+
+    def test_install_refuses_occupied_roles_before_creating_secondary_volumes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_case("preflight-conflict", Path(directory))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("s1 already holds it", result.stderr)
+        self.assertIn("Stopped before writing volumes", result.stderr)

@@ -219,6 +219,7 @@ stage_volumes() {
     [ -n "$data_name" ] || data_name="DataB"
     if dry; then log "dry-run：跳过创建卷。"; return 0; fi
     ssh_ensure
+    apfs_preflight_role_conflicts "$T_ROLES" || return 1
     data_is_encrypted && encrypt=1
 
     if apfs_vol_exists "$T_MNT_SYSTEM_B"; then
@@ -266,6 +267,7 @@ stage_rootfs() {
     require_root rootfs
     preflight_install_inputs
     ssh_ensure
+    apfs_preflight_role_conflicts "$T_ROLES" || return 1
     # donor_mount 负责 owners 模式、复用已挂载点、校验 rootfs build 号（17H35）；
     # 卸载交给 EXIT trap（donor_umount_all），避免失败/中断时留下挂载。
     mnt="$(donor_mount j96)" || die "rootfs DMG 挂载失败"
@@ -326,6 +328,7 @@ stage_patch_rootfs() {
     fi
 
     ssh_ensure
+    apfs_preflight_role_conflicts "$T_ROLES" || return 1
     guard_target_volumes
     mount_vol "$T_MNT_SYSTEM_B" "$OV_MNT"
     while IFS="$(printf '\t')" read -r -u 3 layer role id feat; do

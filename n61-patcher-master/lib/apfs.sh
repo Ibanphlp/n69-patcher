@@ -453,8 +453,32 @@ mount_data_b() {
 }
 
 # ---------- 改 role ----------
+apfs_check_role_conflicts() {   # role spec, failure context
+    local spec="$1" context="$2" pair idx role i
+    for pair in $spec; do
+        idx="${pair%%:*}"
+        role=$(( ${pair##*:} ))
+        [ "$role" -ne 0 ] || continue
+        for i in "${APFS_V_IDX[@]}"; do
+            [ "$i" = "$idx" ] && continue
+            if [ "$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)" = "$role" ]; then
+                die "Cannot assign s$idx role 0x$(printf '%x' "$role"): s$i already holds it. $context"
+            fi
+        done
+    done
+}
+
+apfs_preflight_role_conflicts() (
+    # Read a fresh inventory without caching it across volume creation.
+    APFS_CACHE="$(mktemp -d "${TMPDIR:-/tmp}/n61-apfs-preflight.XXXXXX")" ||
+        die "Cannot create a temporary directory for the APFS preflight."
+    trap apfs_cleanup EXIT
+    apfs_volumes
+    apfs_check_role_conflicts "$1" "Stopped before writing volumes in this stage."
+)
+
 apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
-    local spec="$1" write="$2" pair idx role i paddr blk old tmp bak readback
+    local spec="$1" write="$2" pair idx role paddr blk old tmp bak readback
     local mnts backup_dir
     apfs_volumes
     if [ "$write" -eq 1 ]; then
@@ -471,18 +495,10 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
         [ -n "${APFS_V_BLOCK[$idx]:-}" ] || die "s$idx 不存在"
         blk="${APFS_V_BLOCK[$idx]}"
         apfs_checksum_ok "$blk" || die "s$idx: 现有校验和无效，拒绝改动"
-        # role 唯一性：其他卷不得占用同一 role
-        if [ "$role" -ne 0 ]; then
-            for i in "${APFS_V_IDX[@]}"; do
-                [ "$i" = "$idx" ] && continue
-                if [ "$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)" = "$role" ]; then
-                    die "Cannot assign s$idx role 0x$(printf '%x' "$role"): s$i already holds it. No roles changed."
-                fi
-            done
-        fi
         old="$(rd_u16 "$blk" $APFS_ROLE_OFF)"
         log "s$idx: role 0x$(printf '%x' "$old") -> 0x$(printf '%x' "$role")"
     done
+    apfs_check_role_conflicts "$spec" "No roles changed."
     [ "$write" -eq 1 ] || return 0
 
     backup_dir="$(mktemp -d "$WK/apfs-role-backup.XXXXXX")" ||
