@@ -37,7 +37,7 @@ class DiagnosticsTests(unittest.TestCase):
                 contextlib.redirect_stdout(output),
             ):
                 cli.doctor()
-            self.assertIn(f"img4: {tool}", output.getvalue())
+            self.assertIn(f"img4: {tool.resolve()}", output.getvalue())
 
     def test_doctor_requires_nonempty_inputs_and_executable_tools(self):
         with tempfile.TemporaryDirectory() as root, contextlib.redirect_stdout(io.StringIO()):

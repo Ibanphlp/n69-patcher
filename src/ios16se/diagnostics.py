@@ -11,6 +11,7 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
+from tempfile import mkdtemp
 
 from .firmware import IPAD5_16_7_16, TARGET_15_8_8
 
@@ -36,6 +37,11 @@ def timestamp(raw):
         return value.astimezone(timezone.utc) if value.tzinfo is not None else None
     except (ValueError, OverflowError):
         return None
+
+
+def new_directory(logs, prefix):
+    logs.mkdir(parents=True, exist_ok=True)
+    return Path(mkdtemp(prefix=prefix, dir=logs))
 
 
 def capture_context(root, image_dir, mode, scope, images=None):
@@ -146,7 +152,7 @@ def read_report(path, collected_at, start=None):
     return result
 
 
-def write_evidence(out_dir, connected, info, matched, host_context, *, collected_at=None):
+def write_evidence(out_dir, connected, info, matched, host_context, *, collected_at=None, complete=True):
     fields = {}
     for line in (info or "").splitlines():
         key, sep, value = line.partition(": ")
@@ -163,14 +169,17 @@ def write_evidence(out_dir, connected, info, matched, host_context, *, collected
                 reports.append(report)
     evidence = {
         "schema_version": SCHEMA_VERSION, "attempt_id": context.get("attempt_id") or str(uuid4()),
-        "completed_at_utc": utc_now(), "host_context": host_context,
+        "capture_status": "complete" if complete else "incomplete",
+        "completed_at_utc": utc_now() if complete else None, "host_context": host_context,
         "donor_kernel_entry": "unproven",
         "donor_kernel_entry_reason": "The SSH endpoint and stored reports are not tied to the current donor kernel.",
         "ssh_connected": connected,
         "device_observation": {**fields, "matches_pre_boot_ecid": matched} if fields else None,
         "stored_reports": reports,
     }
-    (out_dir / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    pending = out_dir / ".evidence.tmp"
+    pending.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+    pending.replace(out_dir / "evidence.json")
     return evidence
 
 
@@ -201,12 +210,14 @@ def summary(report):
                  if context.get("bootx_sent_at_utc") else "no handoff timestamp recorded")
     return "\n".join([
         "Capture: " + (report.get("attempt_id") or "unknown (legacy)"),
+        "Capture status: " + report.get("capture_status", "unknown (legacy)"),
         describe_modes(context),
         "Last recorded device OS response: " + observed,
         "Host handoff: " + last_host,
         "Host capture completed: " + (report.get("completed_at_utc") or "unknown"),
         "SSH probe replied: " + str(report.get("ssh_connected")),
-        "First unconfirmed boot stage: donor kernel entry on this SE",
+        ("First unconfirmed boot stage: donor kernel entry on this SE" if context.get("bootx_sent_at_utc")
+         else "First unconfirmed handoff: host bootx return unknown; donor kernel entry unproven"),
         f"Stored reports awaiting attribution: {len(report['stored_reports'])}",
     ])
 
@@ -251,8 +262,9 @@ def public_evidence(report):
         "schema_version": SCHEMA_VERSION,
         "attempt_id": token(report.get("attempt_id"), "[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}"),
         "completed_at_utc": instant(report.get("completed_at_utc")),
+        "capture_status": token(report.get("capture_status"), "incomplete|complete") or "unknown",
         "host_context": safe_context,
-        "ssh_connected": report.get("ssh_connected") is True,
+        "ssh_connected": report.get("ssh_connected") if isinstance(report.get("ssh_connected"), bool) else None,
         "donor_kernel_entry": "unproven",
         "device_observation": {
             "ProductType": token(device.get("ProductType"), r"iPhone[0-9]{1,2},[0-9]{1,2}"),

@@ -117,3 +117,20 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("D2255 PMU | off | selected | selected", actual)
         self.assertIn("SPIN69 | off | off | selected | not tested (personality only)", actual)
         self.assertIn("CS42L71 | off | off | off", actual)
+
+    def test_capture_survives_failure_before_handoff(self):
+        from types import SimpleNamespace
+
+        args = SimpleNamespace(mode="minimal", im4m=None)
+        with (
+            patch.object(cli, "LOGS_DIR", self.root),
+            patch.object(cli, "build_images", side_effect=SystemExit(1)),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            cli.boot_device(args, capture_logs=True)
+        report = d.load_capture(next(self.root.iterdir()))
+        self.assertTrue(report["attempt_id"])
+        self.assertEqual(report["capture_status"], "incomplete")
+        self.assertIsNone(report["ssh_connected"])
+        self.assertIn("host bootx return unknown", d.summary(report))

@@ -255,6 +255,11 @@ def build_images(mode: str = "full", im4m: Optional[Path] = None):
 
 def boot_device(args, capture_logs: bool = False):
     """Execute full boot sequence."""
+    if capture_logs:
+        out_dir = diagnostics.new_directory(LOGS_DIR, "kernel-")
+        initial = write_evidence(out_dir, None, None, None, {"requested_mode": args.mode}, complete=False)
+        record_event(out_dir, "capture requested before build")
+        say(f"Capture {initial['attempt_id']}: {out_dir}")
     build_images(args.mode, args.im4m)
 
     probe = read_device_probe()
@@ -271,6 +276,8 @@ def boot_device(args, capture_logs: bool = False):
 
     if capture_logs:
         context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "pre_send_snapshot", images)
+        context["attempt_id"] = initial["attempt_id"]
+        write_evidence(out_dir, None, None, None, context, complete=False)
         say(diagnostics.describe_modes(context), "info")
 
     pwn_device()
@@ -311,7 +318,7 @@ def boot_device(args, capture_logs: bool = False):
     if capture_logs:
         context["bootx_sent_at_utc"] = sent_at
         return capture_kernel_logs(port=args.port, max_wait=args.wait, recovery_probe=probe,
-                                   host_context=context)
+                                   host_context=context, out_dir=out_dir)
 
 
 SSH_COMMANDS = (
@@ -372,7 +379,7 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
 
 
 def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe: str = "",
-                        host_context: dict | None = None):
+                        host_context: dict | None = None, out_dir: Path | None = None):
     """Keep the boot-capture SSH exit status even if stock reports are available."""
     from src.ios16se.sep import parse_irecovery_identity
 
@@ -381,7 +388,7 @@ def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe
     except ValueError:
         ecid = None
     connected = capture_logs(wait=max_wait, port=port, after_bootx=True, expected_ecid=ecid,
-                             host_context=host_context)
+                             host_context=host_context, out_dir=out_dir)
     return 0 if connected else 1
 
 
@@ -417,10 +424,12 @@ def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: float 
 
 
 def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False,
-                 expected_ecid: int | None = None, host_context: dict | None = None) -> bool:
+                 expected_ecid: int | None = None, host_context: dict | None = None,
+                 out_dir: Path | None = None) -> bool:
     """Collect available host and device diagnostics independently."""
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    out_dir = Path(tempfile.mkdtemp(prefix="kernel-" if after_bootx else "capture-", dir=LOGS_DIR))
+    if out_dir is None:
+        out_dir = diagnostics.new_directory(LOGS_DIR, "kernel-" if after_bootx else "capture-")
+    write_evidence(out_dir, None, None, None, host_context, complete=False)
     record_event(out_dir, "host returned from bootx; capture started" if after_bootx else "standalone capture started")
     if not after_bootx:
         if sys.platform == "darwin":
