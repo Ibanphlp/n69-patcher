@@ -257,6 +257,15 @@ stage_volumes() {
     [ -n "$data_name" ] || data_name="DataB"
     if dry; then log "dry-run：跳过创建卷。"; return 0; fi
     ssh_ensure
+    if [ "$T_NAME" = "n69-ios16" ]; then
+        guard_n69_recovery_role || return 1
+    fi
+    if apfs_vol_exists "$T_MNT_SYSTEM_B"; then
+        guard_target_volumes system
+    fi
+    if apfs_vol_exists "$T_MNT_DATA_B"; then
+        guard_target_volumes data
+    fi
     data_is_encrypted && encrypt=1
 
     if [ "${OPT_RECREATE_DATA:-0}" -eq 1 ] && apfs_vol_exists "$T_MNT_DATA_B"; then
@@ -297,6 +306,9 @@ stage_rootfs() {
     require_root rootfs
     preflight_install_inputs
     ssh_ensure
+    if [ "$T_NAME" = "n69-ios16" ]; then
+        guard_n69_recovery_role || return 1
+    fi
     # donor_mount 负责 owners 模式、复用已挂载点、校验 rootfs build 号（17H35）；
     # 卸载交给 EXIT trap（donor_umount_all），避免失败/中断时留下挂载。
     mnt="$(donor_mount j96)" || die "rootfs DMG 挂载失败"
@@ -488,6 +500,21 @@ resolve_stock_data_slot() {
 }
 
 # ---------- finish（rootfs.finish）----------
+copy_unique_preboot_sep() {
+    rsh "
+        set --
+        for f in '${PREBOOT_MNT:-/mnt8}'/*/usr/standalone/firmware/sep-firmware.img4; do
+            [ -f \"\$f\" ] || continue
+            set -- \"\$@\" \"\$f\"
+        done
+        case \"\$#\" in
+            0) echo 'No SEP firmware file found in Preboot.' >&2; exit 1 ;;
+            1) /bin/cp -a \"\$1\" /mnt6/usr/standalone/firmware/ ;;
+            *) echo 'Multiple SEP firmware files found in Preboot. Refusing to copy.' >&2; exit 1 ;;
+        esac
+    "
+}
+
 # SevenUP: the new system is selected with rd=, and the phone's existing Data
 # volume keeps its systembag. No ramdisk SEP, no new systembag, no role move
 # of the iOS 15 System or Data volumes.
@@ -502,8 +529,7 @@ stage_finish_shared_data() {
     rsh "mkdir -p /mnt6/usr/standalone/firmware"
     if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
         preboot_mount
-        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
-            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+        copy_unique_preboot_sep || die "Could not copy an unambiguous SEP firmware file from Preboot."
     else
         rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
     fi
@@ -569,8 +595,7 @@ stage_finish() {
     rsh "mkdir -p /mnt6/usr/standalone/firmware"
     if ! ssh_run "test -f /mnt1/usr/standalone/firmware/sep-firmware.img4" >/dev/null 2>&1; then
         preboot_mount
-        rsh "f=\$(ls ${PREBOOT_MNT:-/mnt8}/*/usr/standalone/firmware/sep-firmware.img4 2>/dev/null | head -1); [ -n \"\$f\" ] || exit 1; /bin/cp -a \"\$f\" /mnt6/usr/standalone/firmware/" ||
-            die "找不到本机 sep-firmware.img4（s1 与 Preboot 都没有）"
+        copy_unique_preboot_sep || die "Could not copy an unambiguous SEP firmware file from Preboot."
     else
         rsh "/bin/cp -a /mnt1/usr/standalone/firmware/sep-firmware.img4 /mnt6/usr/standalone/firmware/"
     fi

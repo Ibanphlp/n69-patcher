@@ -118,7 +118,7 @@ setup_workdir() {
         WORK="$REPO/build/${T_NAME}-latest"
     fi
     case "$WORK" in /*) ;; *) WORK="$REPO/$WORK" ;; esac
-    if [ "${OPT_DRY_RUN:-0}" -ne 1 ]; then
+    if [ "${OPT_DRY_RUN:-0}" -ne 1 ] && [ "${STAGE:-}" != "status" ]; then
         mkdir -p "$WORK" || die "无法创建工作目录: ${WORK}"
     fi
     WK="$WORK"

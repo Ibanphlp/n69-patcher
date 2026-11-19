@@ -130,8 +130,7 @@ class AudioCS42L71Patch(KernelPatch):
         self.donor_kc = donor_kc
 
     def apply(self, ctx: PatchContext) -> Path:
-        # CS42L81 is too small. This stays off the boot list; requesting it
-        # runs the real engine and fails closed if a binding is missing.
+        # The CS42L81 allocation cannot hold this codec. Stop before transplantation.
         raise RuntimeError(
             "audio_cs42l71 is not on the boot path; AppleCS42L81Audio is too small "
             "and the CS42L71 binding set is not yet a boot dependency"

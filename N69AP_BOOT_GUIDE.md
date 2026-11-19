@@ -62,17 +62,24 @@ python run_n69_ios16_boot.py --im4m state/IM4M.bin --mode full --boot
 |------|----------------|----------|
 | `safe-minimal` | generic_security, remove_ipad_drivers, pmu_d2255, sep_legacy, panic_overlay | Minimal boot with reviewed PMU/SEP shims |
 | `minimal` | generic_security, remove_ipad_drivers, panic_overlay | Basic boot without driver ports |
-| `full` | All patches | Full driver functionality (PMU, Display, Audio, WiFi, etc.) |
+| `full` | Adds Chestnut, Pinot and SPIN69 to the PMU and SEP changes | Hardware operation remains unverified |
 
 ## Driver Transplants
 
-| Driver | Footprint | New Driver | Purpose |
-|--------|-----------|------------|---------|
-| `AppleD2365PMU` | 4285 bytes | `AppleD2255PMU` | Power management |
-| `AppleDPDisplay` | 66280 bytes | `ApplePinotLCD` | MIPI-DSIM display |
-| `AppleCS42L81Audio` | 108605 bytes | `AppleCS42L71Audio` | Audio codec |
-| `AppleAE2Audio` | ~8708 bytes | `AppleCS35L19Amp` | Amplifier |
-| `AppleHDQGasGaugeControl` | 8708 bytes | `AppleC26Charger` | Charging |
+The committed [compatibility report](research/n69-compatibility-report.json) identifies the two kernel images by hash. Its three passing results cover linking on those images. Device initialization and peripheral operation remain unverified.
+
+| Component | N69AP profile | Evidence and limits |
+|-----------|---------------|---------------------|
+| D2255 PMU | Enabled | The report records 68 bindings. Power management on the SE remains unverified. |
+| Pinot LCD | Enabled | The report records five bindings. It contains no framebuffer observation. |
+| Touchscreen | Enabled | The report records one binding for `AppleMultitouchSPI`. Its test ends before the separate SPIN69 personality step. Touch input remains unverified. |
+| Chestnut display power | Enabled | Implemented separately from Pinot. The report contains no Chestnut result. |
+| SEP compatibility | Enabled | The tests check firmware and ticket handling and a synthetic code change. Device SEP services and Touch ID remain unverified. |
+| CS42L71 audio codec | Disabled | The implementation refuses the transplant and reports insufficient space. |
+| CS35L19 amplifier | Disabled | The implementation refuses the transplant. |
+| C26 charger | Disabled | The implementation refuses the transplant and reports insufficient space. Charging behavior on hardware remains unverified. |
+| Broadcom Wi-Fi | Disabled | Firmware hash handling exists. The report contains no Wi-Fi association or traffic test. |
+| DRV2604 vibration | Disabled | The implementation refuses the transplant and reports a missing driver class. |
 
 ## Output Artifacts
 
@@ -116,11 +123,6 @@ run_boot.sh                    # Shell wrapper
 - [x] root-partition selection via kairos
 - [x] iPad 5 iOS 16 kernelbase extraction
 - [x] iPad driver removal from prelink XML
-- [x] PMU D2255 driver transplant
-- [x] Display Pinot driver transplant
-- [x] Audio CS42L71/CS35L19 driver transplants
-- [x] SEP legacy compatibility patches
-- [x] WiFi BCM hash bypass
 - [x] Watchtower append
 - [x] KernelCache recompress
 - [x] IM4M signing for all components

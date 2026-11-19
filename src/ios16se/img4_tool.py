@@ -113,7 +113,7 @@ class Img4Tool:
         return {}
 
 
-def get_img4_tool(im4m_path: Optional[Path] = None) -> Img4Tool:
+def get_img4_tool(im4m_path: Optional[Path] = None, *, project_dir: Path = Path(".")) -> Img4Tool:
     """Get img4 instance, searching standard locations.
 
     Ordering is host-aware: on Darwin, macOS binaries are preferred; on Linux,
@@ -143,7 +143,8 @@ def get_img4_tool(im4m_path: Optional[Path] = None) -> Img4Tool:
             Path("img4"),
         ]
 
-    for c in candidates:
+    for relative_path in candidates:
+        c = project_dir / relative_path
         if not c.is_file():
             continue
         # Skip non-native binaries: an ELF won't run on macOS and vice versa.

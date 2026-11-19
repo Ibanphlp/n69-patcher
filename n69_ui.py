@@ -161,6 +161,10 @@ MODE_COPY = {
 }
 
 
+def diagnostic_command(mode: str) -> list[str]:
+    return [sys.executable, str(ROOT / "ios16se_cli.py"), "logs", "--mode", mode]
+
+
 def run_plan(disk_install: bool) -> list[str]:
     """Steps Start runs, in order. The board comes from the phone, not a switch."""
 
@@ -234,6 +238,8 @@ def main() -> int:
     start_button.pack(fill="x", pady=(0, 8))
     stop_button = ctk.CTkButton(controls, text="Stop", fg_color="#7f1d1d", hover_color="#991b1b", state="disabled")
     stop_button.pack(fill="x")
+    collect_button = ctk.CTkButton(controls, text="Collect diagnostics")
+    collect_button.pack(fill="x", pady=(8, 0))
 
     board = {"name": ""}
     cancel = threading.Event()
@@ -244,6 +250,7 @@ def main() -> int:
 
     def set_busy(busy: bool) -> None:
         start_button.configure(state="disabled" if busy else "normal")
+        collect_button.configure(state="disabled" if busy else "normal")
         stop_button.configure(state="normal" if busy else "disabled")
         if busy:
             progress.configure(mode="indeterminate")
@@ -278,6 +285,21 @@ def main() -> int:
             lines.put("\n[!] Stopping.\n")
             proc.terminate()
 
+    def collect() -> None:
+        selected = mode.get()
+        set_busy(True)
+        cancel.clear()
+
+        def worker():
+            try:
+                invoke(diagnostic_command(selected), os.environ.copy(), "")
+            except OSError as error:
+                lines.put(f"Diagnostics failed: {error}\n")
+            finally:
+                lines.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def launch(action: Action, board_name: str) -> int:
         argv, extra = command_for(
             action, mode=mode.get(), board=board_name,
@@ -285,21 +307,23 @@ def main() -> int:
         )
         if action.sudo:
             argv = ["sudo", "-S", "-p", "", *argv]
-        lines.put(f"\n$ {' '.join(argv)}\n")
         environment = os.environ.copy()
         environment.update(extra)
+        payload = (password.get() + "\n") if action.sudo else ""
+        if action.key == "send":
+            payload += "\n"
+        return invoke(argv, environment, payload)
+
+    def invoke(argv, environment, payload):
+        lines.put(f"\n$ {' '.join(argv)}\n")
         proc = subprocess.Popen(
             argv, cwd=ROOT, env=environment, stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
         )
         runner["proc"] = proc
-        if proc.stdin is not None:
-            payload = (password.get() + "\n") if action.sudo else ""
-            if action.key == "send":
-                payload += "\n"
-            if payload:
-                proc.stdin.write(payload)
-                proc.stdin.flush()
+        if proc.stdin is not None and payload:
+            proc.stdin.write(payload)
+            proc.stdin.flush()
         assert proc.stdout is not None
         for line in proc.stdout:
             lines.put(line)
@@ -383,6 +407,7 @@ def main() -> int:
             pass
         app.after(80, pump_with_probe)
 
+    collect_button.configure(command=collect)
     start_button.configure(command=start)
     stop_button.configure(command=stop)
     app.after(80, pump_with_probe)

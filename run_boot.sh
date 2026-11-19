@@ -6,7 +6,7 @@
 #   ./run_boot.sh [full|minimal|safe-minimal] [--boot]
 #
 # Modes:
-#   full          - All driver patches + WiFi + SEP compatibility
+#   full          - Includes display power, LCD and touchscreen adaptations
 #   minimal       - Only essential patches (remove_ipad_drivers, generic_security)
 #   safe-minimal  - PMU + SEP legacy patches only (safest for unknown hardware)
 #
@@ -70,10 +70,8 @@ echo "[✓] All IPSWs present"
 # 3. Run the unified Python boot script
 if [ "$BOOT_FLAG" = "--boot" ]; then
     python3 run_n69_ios16_boot.py --im4m "$IM4M" --mode "$MODE" --boot
+    echo "Boot commands sent. Check device output for kernel startup."
 else
     python3 run_n69_ios16_boot.py --im4m "$IM4M" --mode "$MODE" --build-only
+    echo "Build completed in build-only mode."
 fi
-
-echo "=========================================="
-echo "BOOT SEQUENCE COMPLETED"
-echo "=========================================="

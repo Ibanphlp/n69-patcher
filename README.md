@@ -5,7 +5,7 @@ This project provides an automated tethered boot pipeline for the iPhone SE 1st 
 ## Features
 - **Boot Chain Build**: Full automated build of iBSS, iBEC, DT, TC, SEP, and KernelCache.
 - **SevenUP Transplant Engine**: Ported for kernel driver displacement on N69AP.
-- **Full Patch Pipeline**: Implements PMU, Touch, Display, Audio, WiFi, SEP, and Charger patches.
+- **N69AP drivers** — The project records structural checks for the PMU, display and touchscreen SPI driver. [Driver coverage](N69AP_BOOT_GUIDE.md#driver-transplants)
 - **Installation Pipeline**: Includes scripts for APFS volume creation, rootfs streaming, and finalizing the installation.
 
 ## Installation Pipeline
@@ -15,6 +15,10 @@ On an Intel Mac, run `N69_EXPERIMENTAL_INSTALL_ACK=1 ./n69ap_ios16_full_install.
 If multiple Preboot slots exist, set `N69_PREBOOT_HASH` to the correct 96-character slot hash. The captured device-specific files in `state/` are private; never share them. The captured SEP is copied unchanged, not re-signed from an IPSW.
 
 Recapture the SEP after restoring the stock system or changing devices. Capture verifies the embedded ticket and its Preboot slot; the shell boot path also checks its ECID and CPID against the connected recovery device. Hardware boot success is not yet verified.
+
+## Diagnostics
+
+Use the [one-page capture sheet](FICHE_ESSAI.md) to record, compare and share an attempt.
 
 ## Requirements
 - Intel-based Mac (for DFU tool compatibility)

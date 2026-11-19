@@ -1,0 +1,118 @@
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+LIB = Path(__file__).resolve().parents[1] / "n61-patcher-master" / "lib"
+HARNESS = r"""
+set -uo pipefail
+source "$1/apfs.sh"
+source "$1/stage.sh"
+die() { printf '%s\n' "$*" >&2; exit 1; }
+apfs_volumes() { return 0; }
+dry() { return 1; }
+ssh_ensure() { return 0; }
+data_is_encrypted() { return 1; }
+apfs_vol_exists() { [ -n "${APFS_V_BLOCK[$1]:-}" ]; }
+apfs_create_volumes() { return 0; }
+rsh_timeout() { die "Reached a device write"; }
+log() { :; }
+rsh() { :; }
+T_NAME=n69-ios16
+T_MNT_SYSTEM_B=8
+T_MNT_DATA_B=9
+T_VOL_CREATE="SystemB DataB"
+T_ROLES="8:0x4"
+
+make_block() {
+    local idx="$1" role="$2" name="$3" block="$TMPDIR/s$1.bin"
+    dd if=/dev/zero of="$block" bs=4096 count=1 2>/dev/null
+    printf "\x$(printf '%02x' "$role")" |
+        dd of="$block" bs=1 seek=$((APFS_ROLE_OFF)) conv=notrunc 2>/dev/null
+    printf '%s\x00residual' "$name" |
+        dd of="$block" bs=1 seek=$((APFS_NAME_OFF)) conv=notrunc 2>/dev/null
+    apfs_seal "$block"
+    APFS_V_IDX[$idx]="$idx"
+    APFS_V_BLOCK[$idx]="$block"
+}
+
+make_block 1 1 System
+make_block 2 64 Data
+make_block 8 4 SystemB
+case "$2" in
+    correct-role) stage_volumes ;;
+    original-reported-layout) make_block 8 0 SystemB; stage_volumes ;;
+    unexpected-system-role) make_block 8 1 SystemB; stage_set_roles ;;
+    wrong-role-target) make_block 8 0 Other; stage_set_roles ;;
+    active-data)
+        make_block 9 64 DataB
+        OPT_RECREATE_DATA=1
+        stage_volumes
+        ;;
+    foreign-recovery) make_block 3 4 Recovery; stage_volumes ;;
+    wrong-name)
+        make_block 9 0 Other
+        OPT_RECREATE_DATA=1
+        stage_volumes
+        ;;
+    bad-checksum)
+        printf 'corrupt' | dd of="$TMPDIR/s8.bin" conv=notrunc 2>/dev/null
+        stage_volumes
+        ;;
+esac
+"""
+
+
+class ApfsDiagnosticsTests(unittest.TestCase):
+    def test_preboot_fallback_never_copies_an_ambiguous_sep(self):
+        script = r"""
+source "$1/stage.sh"
+PREBOOT_MNT="$2"
+rsh() { bash -c "${1//\/mnt6\/usr\/standalone\/firmware\//\"\$DESTINATION\"}"; }
+copy_unique_preboot_sep
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            preboot = Path(directory) / "preboot"
+            destination = Path(directory) / "destination"
+            destination.mkdir()
+            for count in range(3):
+                with self.subTest(candidates=count):
+                    if count:
+                        candidate = preboot / f"firmware {count}" / "usr/standalone/firmware/sep-firmware.img4"
+                        candidate.parent.mkdir(parents=True)
+                        candidate.write_bytes(bytes([count]))
+                    installed = destination / "sep-firmware.img4"
+                    installed.write_bytes(b"original")
+                    result = subprocess.run(
+                        ["bash", "-c", script, "test-preboot", str(LIB), str(preboot)],
+                        env={**os.environ, "DESTINATION": str(destination)},
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertEqual(result.returncode, int(count != 1), result.stderr)
+                    self.assertEqual(installed.read_bytes(), b"\x01" if count == 1 else b"original")
+                    if count == 2:
+                        self.assertIn("Multiple SEP firmware files", result.stderr)
+
+    def test_volume_preflight_preserves_recovery_and_validates_volume_identity(self):
+        cases = {
+            "correct-role": None,
+            "original-reported-layout": None,
+            "unexpected-system-role": "'SystemB' has unexpected role 1",
+            "wrong-role-target": "expected 'SystemB'",
+            "active-data": "'DataB' has unexpected role 64",
+            "foreign-recovery": "s3 already holds the Recovery role",
+            "wrong-name": "expected 'DataB'",
+            "bad-checksum": "s8 has an invalid checksum",
+        }
+        for case, error in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(
+                    ["bash", "-c", HARNESS, "test-apfs", str(LIB), case],
+                    env={**os.environ, "TMPDIR": directory},
+                    capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, int(error is not None), result.stderr)
+                if error:
+                    self.assertIn(error, result.stderr)

@@ -1,0 +1,32 @@
+name: Host diagnostics
+on:
+  pull_request:
+  push:
+    branches: [main, cursor/n69-panic-screen-5e77]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Host evidence, simulated USB and APFS safeguards
+        run: |
+          python -W error::ResourceWarning -m unittest discover -s tests -p 'test_diagnostics.py' -v
+          python -W error::ResourceWarning -m unittest discover -s tests -p 'test_evidence.py' -v
+          python -W error::ResourceWarning -m unittest discover -s tests -p 'test_apfs_diagnostics.py' -v
+      - name: Check Bash syntax and shell entry point
+        run: |
+          git ls-files -z -- '*.sh' n69ui | xargs -0 -n 1 bash -n
+          ./n69ui coverage
