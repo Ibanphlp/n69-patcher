@@ -165,7 +165,9 @@ class DiagnosticsTests(unittest.TestCase):
             patch.object(cli, "capture_logs") as capture,
         ):
             cli.main()
-        capture.assert_called_once_with(wait=7, port=2233)
+        self.assertEqual(capture.call_args.kwargs["wait"], 7)
+        self.assertEqual(capture.call_args.kwargs["port"], 2233)
+        self.assertEqual(capture.call_args.kwargs["host_context"]["artifact_scope"], "standalone_snapshot")
         with (
             patch.object(sys, "argv", ["cli", "doctor", "--verify-firmware"]),
             patch.object(cli, "doctor", return_value=1) as doctor,
@@ -194,10 +196,14 @@ class DiagnosticsTests(unittest.TestCase):
                         '{"panicString":"old panic"}')
                 return subprocess.CompletedProcess(cmd, 0, out.encode(), b"")
 
+            def ssh_timeout(*args):
+                now[0] += 5
+                return False
+
             with (
                 patch.object(cli, "LOGS_DIR", Path(directory)),
                 patch.object(cli, "run", side_effect=host),
-                patch.object(cli, "collect_ssh_logs", return_value=False),
+                patch.object(cli, "collect_ssh_logs", side_effect=ssh_timeout),
                 patch.object(cli.time, "monotonic", side_effect=lambda: now[0]),
                 patch.object(cli.time, "sleep", side_effect=lambda t: now.__setitem__(0, now[0] + t)),
                 contextlib.redirect_stdout(io.StringIO()),

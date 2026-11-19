@@ -28,6 +28,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
+from src.ios16se import diagnostics
+from src.ios16se.diagnostics import write_evidence
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 IMAGES_DIR = SCRIPT_DIR / "artifacts" / "boot"
 STATE_DIR = SCRIPT_DIR / "state"
@@ -258,20 +261,17 @@ def boot_device(args, capture_logs: bool = False):
     if not probe:
         sys.exit(1)
 
-    images = {
-        "iBSS": IMAGES_DIR / "boot_iBSS.img4",
-        "iBEC": IMAGES_DIR / "boot_iBEC.img4",
-        "DeviceTree": IMAGES_DIR / "boot_DT.img4",
-        "TrustCache": IMAGES_DIR / "boot_TC.img4",
-        "SEP": IMAGES_DIR / "sep.img4",
-        "KernelCache": IMAGES_DIR / "boot_KC.img4",
-    }
+    images = {key: IMAGES_DIR / name for key, name in diagnostics.IMAGE_NAMES.items()}
 
     # Verify all images exist
     for name, path in images.items():
         if not path.exists():
             say(f"Missing {name}: {path}", "error")
             sys.exit(1)
+
+    if capture_logs:
+        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "pre_send_snapshot", images)
+        say(diagnostics.describe_modes(context), "info")
 
     pwn_device()
 
@@ -309,14 +309,7 @@ def boot_device(args, capture_logs: bool = False):
     say("Boot sequence sent. Device boot remains unverified.", "info")
 
     if capture_logs:
-        context = {"requested_mode": args.mode, "bootx_sent_at_utc": sent_at}
-        manifest = IMAGES_DIR / "boot.json"
-        try:
-            built = json.loads(manifest.read_text())
-            context["manifest_kernelcache_mode"] = built.get("kernelcache_mode")
-            context["manifest_target"] = built.get("target")
-        except (OSError, ValueError):
-            context["manifest_kernelcache_mode"] = None
+        context["bootx_sent_at_utc"] = sent_at
         return capture_kernel_logs(port=args.port, max_wait=args.wait, recovery_probe=probe,
                                    host_context=context)
 
@@ -423,49 +416,6 @@ def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: float 
     return out
 
 
-def stored_report_summary(path: Path) -> dict:
-    header = {}
-    try:
-        with path.open(encoding="utf-8", errors="replace") as handle:
-            header = json.loads(handle.readline())
-    except (OSError, ValueError):
-        pass
-    if not isinstance(header, dict):
-        header = {}
-    return {
-        "file": str(path),
-        "reported_timestamp": header.get("timestamp"),
-        "reported_os": header.get("os_version"),
-        "collected_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-        "attribution": "unassigned",
-        "attribution_note": "A stored report can predate this boot attempt; compare its timestamp and OS build.",
-    }
-
-
-def write_evidence(out_dir: Path, connected: bool, info: str | None, matched: bool | None,
-                   host_context: dict | None) -> None:
-    fields = {}
-    for line in (info or "").splitlines():
-        key, sep, value = line.partition(": ")
-        if sep and key in ("ProductType", "ProductVersion", "BuildVersion"):
-            fields[key] = value.strip()
-    crash = out_dir / "crash"
-    reports = sorted(path for path in crash.rglob("*") if path.is_file()) if crash.is_dir() else []
-    evidence = {
-        "host_context": host_context,
-        "donor_kernel_entry": "unproven",
-        "donor_kernel_entry_reason": (
-            "SSH is not bound to the pre-boot device identity and the combined log "
-            "may contain older panic reports. Attribution requires a current kernel "
-            "response tied to this device, attempt and donor build."
-        ),
-        "ssh_connected": connected,
-        "device_observation": {**fields, "matches_pre_boot_ecid": matched} if fields else None,
-        "stored_reports": [stored_report_summary(path) for path in reports],
-    }
-    (out_dir / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
-
-
 def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False,
                  expected_ecid: int | None = None, host_context: dict | None = None) -> bool:
     """Collect available host and device diagnostics independently."""
@@ -500,6 +450,9 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
 
     # After a restart the phone may first become visible to lockdownd while we
     # are waiting for SSH. Keep the two observations separate.
+    # SSH can consume its entire budget before lockdownd sees the returning SE.
+    if after_bootx and not connected:
+        deadline = max(deadline, time.monotonic() + min(wait, 10))
     attempt = 0
     while True:
         attempt += 1
@@ -540,6 +493,7 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
                 reason = "Cannot match the returned SE to the device observed before this boot attempt."
             else:
                 record_event(out_dir, "device-info-after.txt matches pre-boot ECID")
+    collected_at = None
     if reason:
         (out_dir / "crash-report.txt").write_text(reason + "\n", encoding="utf-8")
     else:
@@ -549,7 +503,10 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
         record_command(out_dir, "crash-report.txt",
                        ["idevicecrashreport", "-u", udid, "-k", str(destination)], timeout=120)
 
-    write_evidence(out_dir, connected, info, matched, host_context)
+        collected_at = diagnostics.utc_now()
+
+    evidence = write_evidence(out_dir, connected, info, matched, host_context, collected_at=collected_at)
+    say(diagnostics.summary(evidence), "info")
     say(f"Diagnostics saved to {out_dir}", "info")
     return connected
 
@@ -705,6 +662,17 @@ Examples:
     logs_parser.add_argument("--wait", type=int, default=180, help="Max wait for SSH (seconds)")
     logs_parser.add_argument("--port", type=int, default=2222, help="SSH forward port (default: 2222)")
 
+    logs_parser.add_argument("--mode", choices=diagnostics.MODES,
+                             help="Operator-selected mode; records a standalone artifact snapshot")
+    summary_cmd = sub.add_parser("summary", help="Read a saved capture")
+    summary_cmd.add_argument("capture", type=Path)
+    compare = sub.add_parser("compare", help="Compare two saved captures in the given order")
+    compare.add_argument("first", type=Path)
+    compare.add_argument("second", type=Path)
+    share = sub.add_parser("share", help="Export the redacted evidence, summary and event timeline")
+    share.add_argument("capture", type=Path)
+    share.add_argument("output", type=Path)
+    sub.add_parser("coverage", help="Show configured driver modes and offline reference coverage")
     sub.add_parser("status", help="Show build and device status")
     doctor_parser = sub.add_parser("doctor", help="Check host tools and required inputs")
     doctor_parser.add_argument("--verify-firmware", action="store_true",
@@ -725,7 +693,27 @@ Examples:
     elif args.command == "boot-capture":
         return boot_device(args, capture_logs=True)
     elif args.command == "logs":
-        capture_logs(wait=args.wait, port=args.port)
+        context = diagnostics.capture_context(SCRIPT_DIR, IMAGES_DIR, args.mode, "standalone_snapshot")
+        say(diagnostics.describe_modes(context), "info")
+        capture_logs(wait=args.wait, port=args.port, host_context=context)
+    elif args.command == "coverage":
+        from src.ios16se.diagnostic_coverage import coverage
+        print(coverage(SCRIPT_DIR))
+    elif args.command == "summary":
+        report = diagnostics.load_capture(args.capture)
+        print(diagnostics.summary(report))
+        for item in report["stored_reports"]:
+            print("Stored report:", item.get("reported_timestamp"), item.get("reported_build"),
+                  item.get("time_relation", "unknown"), "unassigned")
+            if item.get("panic_string"):
+                print("Panic:", item["panic_string"])
+            if item.get("watchdog_service"):
+                print("Watchdog service:", item["watchdog_service"])
+    elif args.command == "compare":
+        print(diagnostics.comparison(diagnostics.load_capture(args.first), diagnostics.load_capture(args.second)))
+    elif args.command == "share":
+        diagnostics.share_capture(args.capture, args.output)
+        print(f"Shared archive: {args.output} (evidence.json, summary.txt, timeline.log)")
     elif args.command == "status":
         status()
     elif args.command == "doctor":

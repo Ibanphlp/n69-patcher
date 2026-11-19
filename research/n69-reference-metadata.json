@@ -1,0 +1,117 @@
+{
+  "target_kernel_sha256": "4242a4d2cc20e08bc6abe69546c540a884209e6c85a0638841e592ca1f1e57a2",
+  "se_kernel_sha256": "fbd1d55ffb1d11f2859ad9dedad27e992854a0822bcd410246480468aff9ec69",
+  "created_at_utc": "2026-11-19T10:37:53.894654+00:00",
+  "metadata": {
+    "pmu": {
+      "bundle": "com.apple.driver.AppleD2255PMU",
+      "kind": "executable",
+      "dependencies": [
+        "com.apple.driver.AppleARMPMU",
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.driver.AppleDialogPMU",
+        "com.apple.driver.AppleEmbeddedTempSensor",
+        "com.apple.iokit.IOHIDFamily",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": [
+        "PMU",
+        "PMURTC"
+      ]
+    },
+    "display": {
+      "bundle": "com.apple.driver.ApplePinotLCD",
+      "kind": "executable",
+      "dependencies": [
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": [
+        "ApplePinotLCD"
+      ]
+    },
+    "spi": {
+      "bundle": "com.apple.driver.AppleMultitouchSPI",
+      "kind": "executable",
+      "dependencies": [
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": []
+    },
+    "spin69": {
+      "bundle": "com.apple.driver.AppleMultitouchSPIN69",
+      "kind": "personality_only",
+      "dependencies": [
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.driver.AppleMultitouchSPI",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": [
+        "AppleMultitouchSPI - C1,N69"
+      ]
+    },
+    "chestnut": {
+      "bundle": "com.apple.driver.AppleChestnutDisplayPMU",
+      "kind": "executable",
+      "dependencies": [
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": [
+        "AppleChestnutDisplayPMU"
+      ]
+    },
+    "sep": {
+      "bundle": "com.apple.driver.AppleSEPManager",
+      "kind": "executable",
+      "dependencies": [
+        "com.apple.driver.AppleA7IOP",
+        "com.apple.driver.AppleARMPlatform",
+        "com.apple.driver.IOSlaveProcessor",
+        "com.apple.kec.corecrypto",
+        "com.apple.kpi.bsd",
+        "com.apple.kpi.iokit",
+        "com.apple.kpi.libkern",
+        "com.apple.kpi.mach",
+        "com.apple.kpi.private",
+        "com.apple.kpi.unsupported"
+      ],
+      "personalities": [
+        "A7IOPNub",
+        "ARTRequestsDevice",
+        "ARTService",
+        "ARTStorageDevice",
+        "DebugDevice",
+        "HiloDevice",
+        "IntelIOP",
+        "IntelIOPNub",
+        "LoggingDevice",
+        "PairingDevice",
+        "TestingDevice",
+        "xARTMasterDevice",
+        "xARTSlaveDevice"
+      ]
+    }
+  }
+}

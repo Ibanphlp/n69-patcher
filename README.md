@@ -16,6 +16,10 @@ If multiple Preboot slots exist, set `N69_PREBOOT_HASH` to the correct 96-charac
 
 Recapture the SEP after restoring the stock system or changing devices. Capture verifies the embedded ticket and its Preboot slot; the shell boot path also checks its ECID and CPID against the connected recovery device. Hardware boot success is not yet verified.
 
+## Diagnostics
+
+Use the [one-page capture sheet](FICHE_ESSAI.md) to record, compare and share an attempt.
+
 ## Requirements
 - Intel-based Mac (for DFU tool compatibility)
 - iPhone SE 1st Gen (N69AP)

@@ -42,3 +42,6 @@ test_*.raw
 # Build
 build/
 builds/
+
+# Private device captures
+/logs/
