@@ -20,6 +20,7 @@ import tempfile
 import json
 import time
 import hashlib
+import re
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -125,37 +126,19 @@ def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> Non
             )
 
 
-def run_gaster(gaster_bin: Path, args: list[str]) -> None:
-    """Run a gaster subcommand with robust retry logic."""
-    cmd = [str(gaster_bin), *args]
-
-    for attempt in range(3):
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            return
-
-        detail = (result.stdout or "").strip() or (result.stderr or "").strip()
-        print(f"  Gaster {' '.join(args)} failed (attempt {attempt+1}/3): {detail}")
-
-        if "usb_timeout" in detail or "no device" in detail.lower():
-            print("  USB connection lost or timed out. Waiting for DFU...")
-            time.sleep(5)
-            # Try to force a re-pwn if decrypt failed
-            subprocess.run([str(gaster_bin), "pwn"], capture_output=True)
-            time.sleep(2)
-        else:
-            # Fatal error (e.g., file not found, bad arguments)
-            break
-
-    raise BuildError(f"gaster {' '.join(args)} failed after 3 attempts: {detail}")
+def _tool_diagnostic(text: str) -> str:
+    text = re.sub(r"(?im)\b(ECID|UDID|SRNM|serial number|IV|key|KBAG)\s*[:=][^\n]*",
+                  r"\1: [redacted]", text)
+    return re.sub(r"(?i)\b(?:0x)?[0-9a-f]{32,}\b", "[redacted]", text).strip() or "(empty)"
 
 
 def run_checked(cmd: list[str], label: str) -> None:
     """Run a tool, surfacing its real output on failure."""
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if result.returncode != 0:
-        detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "(no output)"
-        raise BuildError(f"{label} failed (exit {result.returncode}): {detail}")
+        raise BuildError(f"{label} failed (exit {result.returncode})\n"
+                         f"stderr: {_tool_diagnostic(result.stderr)}\n"
+                         f"stdout: {_tool_diagnostic(result.stdout)}")
 
 
 def load_config(path: Path) -> BuildConfig:
@@ -240,20 +223,8 @@ def decrypt_iboot(ibss_im4p: Path, ibec_im4p: Path, output_dir: Path, gaster_bin
     # target's AES engine via checkm8 and reads back the plaintext.
     check_device_pwned(irecovery_bin, gaster_bin, board)
 
-    # Retry logic if decrypt fails: the device sometimes loses its pwned state
-    try:
-        run_gaster(gaster_bin, ["decrypt", str(ibss_im4p), str(ibss_dec)])
-    except BuildError:
-        print("  Gaster decrypt failed, retrying pwn...")
-        subprocess.run([str(gaster_bin), "pwn"], check=True, capture_output=False)
-        run_gaster(gaster_bin, ["decrypt", str(ibss_im4p), str(ibss_dec)])
-
-    try:
-        run_gaster(gaster_bin, ["decrypt", str(ibec_im4p), str(ibec_dec)])
-    except BuildError:
-        print("  Gaster decrypt iBEC failed, retrying pwn...")
-        subprocess.run([str(gaster_bin), "pwn"], check=True, capture_output=False)
-        run_gaster(gaster_bin, ["decrypt", str(ibec_im4p), str(ibec_dec)])
+    run_checked([str(gaster_bin), "decrypt", str(ibss_im4p), str(ibss_dec)], "iBSS decrypt")
+    run_checked([str(gaster_bin), "decrypt", str(ibec_im4p), str(ibec_dec)], "iBEC decrypt")
 
     print("  Patching iBSS with iBoot64Patcher...")
     run_checked([str(iboot64patcher_bin), str(ibss_dec), str(ibss_patched)],
