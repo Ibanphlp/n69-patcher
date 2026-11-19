@@ -20,7 +20,7 @@ T_AMP = "CS35L19"
 # 第二系统根分区：s8 (disk0s1s8)——s4=Update/s5=xART/s6=Preboot/s7=Hardware 已被占用
 T_ROOT_PART = 8
 
-# s8 is the iOS 16 system volume, booted with rd=disk0s1s8. The stock Data
+# s8 is the iOS 16 system volume, booted with rd=disk1s8. The stock Data
 # volume keeps role 0x40 and its systembag. Role 0x4 matches SevenUP's
 # Recovery role on the new volume. Do not move the iOS 15 System or Data roles.
 T_VOL_CREATE = "SystemB"
@@ -38,7 +38,7 @@ T_RAMDISK_PASSWORD = "alpine"
 T_RAMDISK_DIR = "../ramdisk-main/sshramdisk"
 
 # 版本级常量（随 iOS 版本变）
-T_BOOTARGS = "rd=disk0s1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
+T_BOOTARGS = "rd=disk1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
 
 # 源 firmware profiles
 # n69: iPhone SE 15.8.8 (本机 bootchain、DT、SEP、baseband、WiFi、无线固件)

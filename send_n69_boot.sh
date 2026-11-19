@@ -151,9 +151,9 @@ else
     printf '%s\n' "$result"
 fi
 # SevenUP refuses a full-iOS iBEC that does not name its root volume.
-# A9 uses disk0, not the A10 disk1 path.
-grep -a -q 'rd=disk0s1s8' "$BOOT_DIR/boot_iBEC.img4" || {
-    echo "boot_iBEC.img4 does not contain rd=disk0s1s8. Refusing to send a chain that would stay in recovery." >&2
+# The iOS 16 system boot uses disk1s8; APFS ramdisk paths are separate.
+grep -a -F -q 'rd=disk1s8 ' "$BOOT_DIR/boot_iBEC.img4" || {
+    echo "boot_iBEC.img4 does not contain rd=disk1s8. Rebuild the full boot chain (not --kernel-only) before retrying." >&2
     exit 1
 }
 grep -a -F -q 'panic-wait-forever=1' "$BOOT_DIR/boot_iBEC.img4" || {

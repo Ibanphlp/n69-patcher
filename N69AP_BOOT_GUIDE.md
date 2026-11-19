@@ -153,7 +153,7 @@ This verifies:
 - Run `N69_PREFLIGHT_ONLY=1 ./send_n69_boot.sh` before retrying. If it still restarts, note whether the verbose log shows panic text or the screen stays frozen; also check iOS 15 Analytics Data for a matching `panic-full`/`panic-base` report.
 
 ### Device reboots to recovery mode
-- Check boot-args: `rd=disk0s1s8` must match SystemB. `disk0s1s4` is Update, not the root.
+- Check boot-args: `rd=disk1s8` selects SystemB on the iOS 16 system boot path; the APFS device name seen from a ramdisk can differ from the system kernel boot argument. Rebuild the complete iBEC chain if it still embeds `rd=disk0s1s8`. This is based on a reported A9 troubleshooting exchange and remains unverified on this SE.
 - `./send_n69_boot.sh` runs an IM4M preflight for KernelCache, DeviceTree, TrustCache and SEP before entering DFU. An explicit `IMG4 preflight failed` points to an artifact/ticket mismatch, not a kernel panic.
 - Verify IM4M signing manually with the vendored tools: `ramdisk-main/Darwin/img4 -i artifacts/boot/boot_DT.img4 -M state/IM4M.bin`; the large KernelCache is parsed with `ramdisk-main/Darwin/img4tool`.
 - The script displays the iBEC boot logo after loading iBEC. If it appears, iBEC accepted the logo commands; if it never appears, investigate pwn/iBSS/iBEC before attributing the black screen to the kernel. The script's `logs/boot-*.log` records irecovery output and per-command exit codes.

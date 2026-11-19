@@ -118,14 +118,31 @@ class GuideTests(unittest.TestCase):
         guide = (ROOT / "N69AP_BOOT_GUIDE.md").read_text()
         self.assertNotIn("rd=disk0s1s4", guide)
         profile = (ROOT / "profiles/n69ap_ios16.toml").read_text()
-        self.assertIn("rd=disk0s1s8", profile)
+        self.assertIn("rd=disk1s8", profile)
+        self.assertNotIn("rd=disk0s1s8", profile)
+        self.assertIn("root_partition = 8", profile)
         self.assertIn("panic-wait-forever=1", profile)
         self.assertIn("debug=0x2014e -v keepsyms=1", profile)
+
+    def test_n69_system_boot_args_use_disk1_without_changing_apfs_slot(self):
+        for filename in (
+            "run_n69_ios16_boot.py",
+            "src/ios16se/install.py",
+            "n61-patcher-master/targets/n69-ios16.sh",
+            "n61-patcher-master/targets/n69-ios16.py",
+        ):
+            with self.subTest(filename=filename):
+                source = (ROOT / filename).read_text()
+                self.assertIn("rd=disk1s8", source)
+                self.assertNotIn("rd=disk0s1s8", source)
+        self.assertIn("T_ROOT_PART=8", (ROOT / "n61-patcher-master/targets/n69-ios16.sh").read_text())
+        self.assertIn("disk0s1s8", (ROOT / "profiles/n69ap_ios16.toml").read_text())
 
     def test_boot_script_has_ibec_logo_and_preserves_root_guard(self):
         script = (ROOT / "send_n69_boot.sh").read_text()
         self.assertIn('run_irecovery "show iBEC boot logo" -c "setpicture 0x1"', script)
-        self.assertIn("grep -a -q 'rd=disk0s1s8'", script)
+        self.assertIn("grep -a -F -q 'rd=disk1s8 '", script)
+        self.assertNotIn("grep -a -q 'rd=disk0s1s8'", script)
         self.assertIn('grep -a -F -q \'panic-wait-forever=1\' "$BOOT_DIR/boot_iBEC.img4"', script)
         self.assertIn("preflight_img4 \"$BOOT_DIR/boot_KC.img4\" KernelCache", script)
         self.assertIn('IMG4 preflight failed for $label', script)

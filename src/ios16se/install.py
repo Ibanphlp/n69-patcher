@@ -36,7 +36,7 @@ class InstallConfig:
 
     # Boot args
     boot_args: str = (
-        "rd=disk0s1s8 -v amfi_get_out_of_my_way=1 "
+        "rd=disk1s8 -v amfi_get_out_of_my_way=1 "
         "cs_enforcement_disable=1 wdt=-1 "
         "debug=0x2014e -v keepsyms=1 serial=3"
     )

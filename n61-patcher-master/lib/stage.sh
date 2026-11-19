@@ -533,7 +533,7 @@ copy_unique_preboot_sep() {
 # volume keeps its systembag. No ramdisk SEP, no new systembag, no role move
 # of the iOS 15 System or Data volumes.
 stage_finish_shared_data() {
-    log "SevenUP layout: rd=disk0s1s${T_ROOT_PART} uses the existing Data volume and its systembag."
+    log "N69 system boot: rd=disk1s${T_ROOT_PART} selects SystemB; existing Data volume keeps its systembag."
     guard_target_volumes system
     mount_vol "$T_MNT_SYSTEM_B" /mnt6
     mount_vol "$T_MNT_SYSTEM12" /mnt1 ro

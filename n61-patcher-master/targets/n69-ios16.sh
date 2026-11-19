@@ -44,7 +44,7 @@ T_RAMDISK_PASSWORD="alpine"
 T_RAMDISK_DIR="../ramdisk-main/sshramdisk"
 
 # ============= 版本级常量（随 iOS 版本变） =============
-T_BOOTARGS="rd=disk0s1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
+T_BOOTARGS="rd=disk1s8 amfi_get_out_of_my_way=1 cs_enforcement_disable=1 wdt=-1 debug=0x2014e keepsyms=1 serial=3"
 
 # 源 firmware profiles
 # n69: iPhone SE 15.8.8 (本机 bootchain、DT、SEP、baseband、WiFi、无线固件)
