@@ -369,15 +369,17 @@ def capture_kernel_logs(port: int = 2222, max_wait: int = 180):
     return 0 if connected else 1
 
 
-def record_command(out_dir: Path, filename: str, cmd: list[str]) -> str:
+def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: int = 10) -> str:
     """Save one host diagnostic and keep collecting if the tool fails."""
     try:
-        result = run(cmd, capture=True, check=False, timeout=10)
+        result = run(cmd, capture=True, check=False, timeout=timeout)
         out = result.stdout.decode(errors="replace")
         err = result.stderr.decode(errors="replace")
         report = out
         if err or result.returncode:
             report += f"\nExit status: {result.returncode}\n{err}"
+        if result.returncode:
+            out = ""
     except subprocess.TimeoutExpired as error:
         out = ""
         report = format_timeout(error)
@@ -399,18 +401,37 @@ def capture_logs(wait: int = 180, port: int = 2222):
         record_command(out_dir, "lsusb.txt", ["lsusb"])
     record_command(out_dir, "irecovery.txt", [str(get_irecovery()), "-q"])
 
-    udids = record_command(out_dir, "idevice-id.txt", ["idevice_id", "-l"]).split()
-    if udids:
-        udid = udids[0]
-        record_command(out_dir, "device-info.txt", ["ideviceinfo", "-u", udid])
-        record_command(out_dir, "pairing.txt", ["idevicepair", "-u", udid, "validate"])
+    initial_ids = record_command(out_dir, "idevice-id.txt", ["idevice_id", "-l"]).split()
+    if len(initial_ids) == 1:
+        record_command(out_dir, "device-info.txt", ["ideviceinfo", "-u", initial_ids[0]])
+        record_command(out_dir, "pairing.txt", ["idevicepair", "-u", initial_ids[0], "validate"])
 
-    if not collect_ssh_logs(out_dir / "ssh.log", port, wait):
+    if len(initial_ids) > 1:
+        (out_dir / "ssh.log").write_text("Multiple devices connected. SSH capture skipped.\n",
+                                         encoding="utf-8")
+    elif not collect_ssh_logs(out_dir / "ssh.log", port, wait):
         say("SSH unavailable. See ssh.log for details.", "warning")
 
-    if udids:
+    # After a restart the phone may first become visible to lockdownd while we
+    # are waiting for SSH. Keep the two observations separate.
+    final_ids = record_command(out_dir, "idevice-id-after.txt", ["idevice_id", "-l"]).split()
+    reason = ""
+    if len(final_ids) != 1:
+        reason = "No unique device visible after SSH capture."
+    elif initial_ids and initial_ids != final_ids:
+        reason = "The connected device list changed. Crash report source is ambiguous."
+    else:
+        udid = final_ids[0]
+        info = record_command(out_dir, "device-info-after.txt", ["ideviceinfo", "-u", udid])
+        if "ProductType: iPhone8,4" not in info.splitlines():
+            reason = "Could not confirm iPhone SE (iPhone8,4) after SSH capture."
+    if reason:
+        (out_dir / "crash-report.txt").write_text(reason + "\n", encoding="utf-8")
+    else:
+        destination = out_dir / "crash"
+        destination.mkdir()
         record_command(out_dir, "crash-report.txt",
-                       ["idevicecrashreport", "-u", udid, "-k", str(out_dir / "crash")])
+                       ["idevicecrashreport", "-u", udid, "-k", str(destination)], timeout=120)
 
     say(f"Diagnostics saved to {out_dir}", "info")
 

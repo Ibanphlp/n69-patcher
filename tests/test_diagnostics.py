@@ -117,6 +117,46 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertLessEqual(ssh_exec.call_args_list[0].kwargs["timeout"], 3)
             self.assertTrue(all(call.args[0] == 2233 for call in ssh_exec.call_args_list))
 
+    def test_crash_reports_follow_device_reappearance(self):
+        cases = [
+            ("", "se", "iPhone8,4", True),
+            ("se", "se", "iPhone8,4", True),
+            ("se", "different", "iPhone8,4", False),
+            ("", "one\ntwo", "iPhone8,4", False),
+            ("", "other", "iPhone9,1", False),
+        ]
+        for before, after, model, expected in cases:
+            with self.subTest(before=before, after=after, model=model), tempfile.TemporaryDirectory() as directory:
+                ids = iter((before, after))
+                copies = []
+
+                def host(cmd, **kwargs):
+                    output = ""
+                    if cmd[0] == "idevice_id":
+                        output = next(ids)
+                    elif cmd[0] == "ideviceinfo":
+                        output = f"ProductType: {model}\nProductVersion: 15.8.8\n"
+                    elif cmd[0] == "idevicecrashreport":
+                        self.assertTrue(Path(cmd[-1]).is_dir())
+                        copies.append(cmd[1:-1])
+                    return subprocess.CompletedProcess(cmd, 0, output.encode(), b"")
+
+                with (
+                    patch.object(cli, "LOGS_DIR", Path(directory)),
+                    patch.object(cli, "run", side_effect=host),
+                    patch.object(cli, "collect_ssh_logs", return_value=False),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    cli.capture_logs(wait=1)
+                report = next(Path(directory).iterdir())
+                self.assertEqual((report / "idevice-id.txt").read_text(), before)
+                self.assertEqual((report / "idevice-id-after.txt").read_text(), after)
+                self.assertEqual(copies, [["-u", "se", "-k"]] if expected else [])
+                if expected:
+                    self.assertIn("15.8.8", (report / "device-info-after.txt").read_text())
+                else:
+                    self.assertTrue((report / "crash-report.txt").read_text().strip())
+
     def test_cli_passes_diagnostic_options_and_exit_status(self):
         with (
             patch.object(sys, "argv", ["cli", "logs", "--port", "2233", "--wait", "7"]),
