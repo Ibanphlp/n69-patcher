@@ -15,9 +15,7 @@ from ios16se.sevenup.kc import plist
 from ios16se.append_wt_fix import extract_watchtower_tail
 
 class BuildTests(unittest.TestCase):
-    def test_check_device_never_pre_pwns_before_gaster_decrypt(self):
-        # gaster decrypt runs checkm8 itself; a second pre-pwn on A9 breaks the
-        # AES exec. check_device_pwned must verify identity and never 'pwn'.
+    def test_check_device_does_not_pwn_when_unpwned(self):
         from ios16se.build import check_device_pwned
         n69uap_probe = "CPID: 0x8003\nMODEL: n69uap\n"
         calls = []
@@ -50,6 +48,21 @@ class BuildTests(unittest.TestCase):
         gaster_verbs = [c[1] for c in calls if c and c[0] == 'gaster' and len(c) > 1]
         self.assertIn('reset', gaster_verbs)
         self.assertNotIn('pwn', gaster_verbs)
+
+    def test_reset_failure_stops_before_decrypt(self):
+        from ios16se.build import check_device_pwned
+        probe = "CPID: 0x8003\nMODEL: n69uap\nPWND:[checkm8]\n"
+
+        def fake_run(cmd, *args, **kwargs):
+            if cmd[1] == '-q':
+                return SimpleNamespace(stdout=probe, stderr='', returncode=0)
+            return SimpleNamespace(stdout='', stderr='reset failed', returncode=7)
+
+        with patch('ios16se.build.subprocess.run', side_effect=fake_run), \
+                patch('ios16se.build.time.sleep') as sleep, \
+                self.assertRaisesRegex(BuildError, 'DFU reset failed .exit 7.'):
+            check_device_pwned(Path('irecovery'), Path('gaster'), 'n69uap')
+        sleep.assert_not_called()
 
     def test_img4_preflight_stops_before_device_on_ticket_mismatch(self):
         import os
@@ -122,6 +135,50 @@ class BuildTests(unittest.TestCase):
                 self.assertNotEqual(a.read_bytes(), b.read_bytes())
                 decrypt_iboot(ibss, ibec, work, tool, tool, 'n69ap', tool)
                 self.assertEqual(len(calls), 2)
+
+    def test_failed_decrypt_preserves_old_files_and_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ibss, ibec, tool = (root / name for name in ('ibss.im4p', 'ibec.im4p', 'patcher'))
+            for source in (ibss, ibec, tool):
+                source.write_bytes(source.name.encode())
+            work = root / 'decrypt'
+            work.mkdir()
+            old = {'iBSS.dec': b'old ibss', 'iBEC.dec': b'old ibec',
+                   'iBSS.patched': b'old patched', 'inputs.json': b'old receipt'}
+            for name, contents in old.items():
+                (work / name).write_bytes(contents)
+
+            for failed_stage in ('iBSS', 'iBEC', 'iBoot64Patcher'):
+                with self.subTest(stage=failed_stage):
+                    def fake_checked(cmd, label):
+                        output = Path(cmd[3] if cmd[1] == 'decrypt' else cmd[2])
+                        output.write_bytes(b'partial write')
+                        if label.startswith(failed_stage):
+                            raise BuildError(f'{label} failed')
+                        output.write_bytes(Path(cmd[2] if cmd[1] == 'decrypt' else cmd[1]).read_bytes())
+
+                    with patch('ios16se.build.check_device_pwned'), \
+                            patch('ios16se.build.run_checked', side_effect=fake_checked), \
+                            self.assertRaises(BuildError):
+                        decrypt_iboot(ibss, ibec, work, tool, tool, 'n69uap', tool)
+                    self.assertEqual({name: (work / name).read_bytes() for name in old}, old)
+                    self.assertEqual({path.name for path in work.iterdir()}, set(old))
+
+    def test_successful_tool_without_output_preserves_old_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ibss, ibec, tool = (root / name for name in ('ibss.im4p', 'ibec.im4p', 'patcher'))
+            for source in (ibss, ibec, tool):
+                source.write_bytes(source.name.encode())
+            work = root / 'decrypt'
+            work.mkdir()
+            (work / 'iBSS.dec').write_bytes(b'old ibss')
+            with patch('ios16se.build.check_device_pwned'), \
+                    patch('ios16se.build.run_checked'), \
+                    self.assertRaisesRegex(BuildError, 'nonempty iBSS.dec'):
+                decrypt_iboot(ibss, ibec, work, tool, tool, 'n69uap', tool)
+            self.assertEqual((work / 'iBSS.dec').read_bytes(), b'old ibss')
 
     def test_first_tool_failure_is_reported_without_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

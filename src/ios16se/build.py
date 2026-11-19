@@ -90,19 +90,7 @@ def selected_identity(config: BuildConfig):
 
 
 def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> None:
-    """Verify the connected DFU device matches `board` and leave it clean.
-
-    `gaster decrypt` is a device-bound operation: it sends the iBSS/iBEC KBAG
-    to the target's AES engine via checkm8 and reads back the plaintext. It
-    runs the checkm8 exploit *itself* (``gaster_decrypt_file`` always calls
-    ``gaster_checkm8``), so the build must NOT pre-pwn the device: a second
-    checkm8 on an already-exploited A9 (CPID 0x8003/0x8000) leaves the AES
-    trampoline in an inconsistent state and the exec round-trip hangs, which
-    shows up as the decrypt exiting 1 right after "Now you can boot untrusted
-    images." We therefore only confirm identity here and make sure the device
-    is in a clean (un-pwned) DFU state, so `gaster decrypt`'s single exploit
-    runs from a known-good start.
-    """
+    """Check the DFU device identity and report a failed reset before building."""
     probe = subprocess.run([str(irecovery_bin), "-q"], capture_output=True, text=True)
     output = (probe.stdout or "") + (probe.stderr or "")
     from .soc import SocMismatch, identity_from_probe
@@ -118,11 +106,8 @@ def check_device_pwned(irecovery_bin: Path, gaster_bin: Path, board: str) -> Non
             f"Refusing a Samsung artifact set on a TSMC phone and the reverse."
         )
     if "PWND" in output:
-        # A prior exploit is still resident. Return to clean DFU so the
-        # decrypt's own checkm8 is the only one that runs; otherwise it is a
-        # double-exploit and the AES exec step fails.
-        print("  Device already pwned; resetting to clean DFU before decrypt...")
-        subprocess.run([str(gaster_bin), "reset"], check=False, capture_output=False)
+        print("  Device reports PWND; resetting before decrypt...")
+        run_checked([str(gaster_bin), "reset"], "DFU reset")
         time.sleep(2)
 
 
@@ -216,24 +201,35 @@ def decrypt_iboot(ibss_im4p: Path, ibec_im4p: Path, output_dir: Path, gaster_bin
             return ibss_patched, ibec_dec
     except (OSError, ValueError):
         pass
-    cache_file.unlink(missing_ok=True)
-
     print("  Decrypting iBSS/iBEC via gaster (device must be in DFU)...")
-    # gaster decrypt is device-bound: it sends the iBSS/iBEC KBAG to the
-    # target's AES engine via checkm8 and reads back the plaintext.
     check_device_pwned(irecovery_bin, gaster_bin, board)
 
-    run_checked([str(gaster_bin), "decrypt", str(ibss_im4p), str(ibss_dec)], "iBSS decrypt")
-    run_checked([str(gaster_bin), "decrypt", str(ibec_im4p), str(ibec_dec)], "iBEC decrypt")
+    with tempfile.TemporaryDirectory(prefix="decrypt-", dir=output_dir) as staging_dir:
+        staging = Path(staging_dir)
+        staged_ibss = staging / ibss_dec.name
+        staged_ibec = staging / ibec_dec.name
+        staged_patched = staging / ibss_patched.name
+        run_checked([str(gaster_bin), "decrypt", str(ibss_im4p), str(staged_ibss)], "iBSS decrypt")
+        run_checked([str(gaster_bin), "decrypt", str(ibec_im4p), str(staged_ibec)], "iBEC decrypt")
 
-    print("  Patching iBSS with iBoot64Patcher...")
-    run_checked([str(iboot64patcher_bin), str(ibss_dec), str(ibss_patched)],
-                "iBoot64Patcher iBSS")
+        print("  Patching iBSS with iBoot64Patcher...")
+        run_checked([str(iboot64patcher_bin), str(staged_ibss), str(staged_patched)],
+                    "iBoot64Patcher iBSS")
 
-    if digest(ibss_dec) == digest(ibec_dec):
-        raise BuildError("Decrypted iBSS and iBEC are identical; refusing invalid boot chain")
-    cache_file.write_text(json.dumps({"inputs": expected, "ibss_output": digest(ibss_patched),
-                                     "ibec_output": digest(ibec_dec)}, sort_keys=True))
+        for artifact in (staged_ibss, staged_ibec, staged_patched):
+            if not artifact.is_file() or not artifact.stat().st_size:
+                raise BuildError(f"Build tool did not produce a nonempty {artifact.name}")
+        if digest(staged_ibss) == digest(staged_ibec):
+            raise BuildError("Decrypted iBSS and iBEC are identical; refusing invalid boot chain")
+
+        receipt = {"inputs": expected, "ibss_output": digest(staged_patched),
+                   "ibec_output": digest(staged_ibec)}
+        staged_receipt = staging / cache_file.name
+        staged_receipt.write_text(json.dumps(receipt, sort_keys=True))
+        for source, destination in ((staged_ibss, ibss_dec), (staged_ibec, ibec_dec),
+                                    (staged_patched, ibss_patched)):
+            os.replace(source, destination)
+        os.replace(staged_receipt, cache_file)
     return ibss_patched, ibec_dec
 
 
