@@ -259,8 +259,10 @@ cleanup() {
         exit "$rc"
     fi
     # 失败退出时把 ramdisk 里的系统挂载也卸掉（否则下一次 apfs_deletefs/mount 会撞 resource busy）
-    ssh_run_timeout 8 "/sbin/umount /mnt1 2>/dev/null; /sbin/umount /mnt7 2>/dev/null; /sbin/umount /mnt6 2>/dev/null; /sbin/umount /mnt8 2>/dev/null; true" >/dev/null 2>&1 || true
-    donor_umount_all || true
+    if [ "$STAGE" != "status" ]; then
+        ssh_run_timeout 8 "/sbin/umount /mnt1 2>/dev/null; /sbin/umount /mnt7 2>/dev/null; /sbin/umount /mnt6 2>/dev/null; /sbin/umount /mnt8 2>/dev/null; true" >/dev/null 2>&1 || true
+        donor_umount_all || true
+    fi
     if [ -n "${IPROXY_PID:-}" ]; then
         kill "$IPROXY_PID" 2>/dev/null || true
     fi
@@ -269,7 +271,8 @@ cleanup() {
         rm -rf "$LOCK_DIR"
     fi
     # sudo 运行结束后把工作目录/state 交还给调用用户，避免之后的 ./n61.sh build 无法写
-    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+    if [ "$STAGE" != "status" ] && [ "$(id -u)" -eq 0 ] &&
+        [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
         chown -R "$SUDO_UID:$SUDO_GID" "$WK" 2>/dev/null || true
         [ -d "$REPO/state" ] && chown -R "$SUDO_UID:$SUDO_GID" "$REPO/state" 2>/dev/null || true
     fi

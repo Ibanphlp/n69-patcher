@@ -2,6 +2,8 @@
 
 **For Intel Mac + iPhone SE 1st Gen (N69AP) → iOS 16.7.16**
 
+The installation is experimental. On-device boot and compatibility with the secondary encrypted data volume remain unverified.
+
 ## Quick Start
 
 ### 1. Prepare Your Mac
@@ -46,7 +48,7 @@ This downloads:
 2. **Device Check**: Confirms N69AP in DFU mode
 3. **Ramdisk**: Exploits checkm8 → SSH ramdisk on port 2222
 4. **IM4M**: Extracts device ticket (fully automated via SSH)
-5. **Volumes**: Creates SystemB (s4) and DataB (s5) APFS volumes
+5. **Volumes**: Expects SystemB at s8 and DataB at s9
 6. **RootFS**: Streams ~9GB rootfs (25 min)
 7. **Patches**: Applies driver, keybag, UI resource patches
 8. **Build**: Creates boot images with TrustCache
@@ -68,12 +70,12 @@ This downloads:
 ## Build Modes
 
 ```bash
-./n69ap_ios16_full_install.sh full          # All drivers + charger
-./n69ap_ios16_full_install.sh minimal       # Security only
-./n69ap_ios16_full_install.sh safe-minimal   # PMU + SEP only
+./n69ap_ios16_full_install.sh full
+./n69ap_ios16_full_install.sh minimal
+./n69ap_ios16_full_install.sh safe-minimal
 ```
 
-**Full mode includes**: PMU driver, Touch ID, Display, Audio, WiFi, SEP, and Charger patches
+All modes leave the unvalidated N69AP hardware and SEP patches disabled.
 
 ---
 
@@ -104,17 +106,11 @@ dd if=/dev/disk2 bs=256 count=16384 2>/dev/null | ./ramdisk-main/Darwin/img4 -i 
 
 ## Expected Results
 
-**Boot Probability**: ~85% for SpringBoard (grey icons) on first try
+The installer reports when the boot chain was sent. Verify the OS version on the device to confirm the boot.
 
-**Success indicators**:
-- Device boots to SpringBoard (no spinning wheel)
-- Icons appear as grey placeholders
-- Can select language/country
+The N69AP profile expects `SystemB` and `DataB` to start at role `0x00` before finalization. Recovery (`0x04`) is the role SevenUP uses for `Xystem` on its iPhone 7 target. The N69AP finalization stops when the original iOS 15 volumes already hold System (`0x01`) or Data (`0x40`).
 
-**After boot**:
-1. Select language/country
-2. Connect to WiFi
-3. Sign in with Apple ID
+If an APFS write is interrupted after it starts, the original metadata blocks are retained in the logged `apfs-role-backup.*` directory. The write may have applied partially, so obtain a fresh status report before making further changes.
 
 ---
 

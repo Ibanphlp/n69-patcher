@@ -221,6 +221,13 @@ stage_volumes() {
     ssh_ensure
     data_is_encrypted && encrypt=1
 
+    if apfs_vol_exists "$T_MNT_SYSTEM_B"; then
+        guard_target_volumes system
+    fi
+    if apfs_vol_exists "$T_MNT_DATA_B"; then
+        guard_target_volumes data
+    fi
+
     if [ "${OPT_RECREATE_DATA:-0}" -eq 1 ] && apfs_vol_exists "$T_MNT_DATA_B"; then
         # 先把可能残留的挂载卸掉，否则 apfs_deletefs 会 resource busy
         umount_vols /mnt7 /mnt1
@@ -242,7 +249,7 @@ stage_volumes() {
   换保护模式需要重建 DataB：加 --recreate-data 重跑 volumes（会删除 DataB 数据）。" ;;
             *) die "找不到已存在的 ${data_name} 卷状态，无法确认加密模式" ;;
         esac
-        log "s4/s5 已存在且加密模式一致，跳过建卷。"
+        log "s$T_MNT_SYSTEM_B/s$T_MNT_DATA_B 已存在且加密模式一致，跳过建卷。"
     fi
 
     apfs_create_volumes "$T_VOL_CREATE" "$encrypt"
@@ -494,6 +501,7 @@ stage_finish() {
 
 # ---------- set_roles（rootfs.set_roles，必须最后一步、卷未挂载）----------
 stage_set_roles() {
+    guard_target_volumes
     apfs_set_roles "$T_ROLES" 1
 }
 

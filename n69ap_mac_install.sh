@@ -6,6 +6,12 @@ set -euo pipefail
 
 MODE="${1:-full}"
 
+if [[ "${N69_EXPERIMENTAL_INSTALL_ACK:-}" != "1" ]]; then
+    echo "ERROR: N69 iOS 16 installation is experimental and not boot-validated." >&2
+    echo "APFS changes may affect the existing OS. Review the Mac guide and verify your backup before proceeding." >&2
+    exit 1
+fi
+
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
 echo "║       N69AP iOS 16 - ONE-CLICK INSTALLATION                  ║"
@@ -179,8 +185,8 @@ echo "  Executing bootx..."
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║                    INSTALLATION COMPLETE                       ║"
+echo "║                    BOOT CHAIN SENT                            ║"
 echo "║                                                              ║"
-echo "║  Device should now boot to SpringBoard                       ║"
+echo "║  Device boot remains unverified                              ║"
 echo "║  Check serial console for kernel output                      ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"

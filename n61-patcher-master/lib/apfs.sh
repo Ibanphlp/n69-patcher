@@ -249,7 +249,7 @@ apfs_role_name() {   # 入参为十进制 role
 apfs_describe() {   # idx blockfile paddr
     local idx="$1" blk="$2" paddr="$3" role name flags used ck enc
     role="$(rd_u16 "$blk" $APFS_ROLE_OFF)"
-    name="$(dd if="$blk" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
+    name="$(dd if="$blk" bs=1 skip=$((APFS_NAME_OFF)) count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
     flags="$(rd_u64 "$blk" $APFS_FS_FLAGS_OFF)"
     used=$(( $(rd_u64 "$blk" $APFS_ALLOC_OFF) * APFS_BS ))
     if [ $(( flags & 1 )) -ne 0 ]; then enc="UNENCRYPTED"; else enc="encrypted"; fi
@@ -390,7 +390,7 @@ apfs_vol_fs_flags() {   # name → 打印 flags
     local want="$1" i name
     apfs_volumes
     for i in "${APFS_V_IDX[@]}"; do
-        name="$(dd if="${APFS_V_BLOCK[$i]}" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
+        name="$(dd if="${APFS_V_BLOCK[$i]}" bs=1 skip=$((APFS_NAME_OFF)) count=256 2>/dev/null | LC_ALL=C tr -d '\000')"
         [ "$name" = "$want" ] || continue
         rd_u64 "${APFS_V_BLOCK[$i]}" $APFS_FS_FLAGS_OFF
         return 0
@@ -454,68 +454,69 @@ mount_data_b() {
 
 # ---------- 改 role ----------
 apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
-    local spec="$1" write="$2" pair idx role i name paddr blk old tmp bak readback
-    local mnts used_roles="" stamp
+    local spec="$1" write="$2" pair idx role i paddr blk old tmp bak readback
+    local mnts backup_dir
     apfs_volumes
-    # 旧系统（iOS15 的 SystemA/DataA）已占用 System/Data role 时，iOS16 靠 role 找 Data 卷，
-    # 必须把旧持有者降为 role 0；仅在清单显式设置 T_ROLES_DEMOTE_OLD=1 时执行（每个块先备份）。
-    local demoted="" spec_idx="" prole pidx
-    for pair in $spec; do spec_idx="$spec_idx ${pair%%:*}"; done
-    if [ "${T_ROLES_DEMOTE_OLD:-0}" = "1" ]; then
-        for pair in $spec; do
-            pidx="${pair%%:*}"; prole=$(( ${pair##*:} ))
-            [ "$prole" -ne 0 ] || continue
-            for i in "${APFS_V_IDX[@]}"; do
-                case " $spec_idx " in *" $i "*) continue ;; esac
-                if [ "$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)" = "$prole" ]; then
-                    demoted="$demoted $i"
-                fi
-            done
-        done
-        if [ -n "$demoted" ]; then
-            warn "将把旧卷 s${demoted# } 的 role 降为 0（原块已备份到 $WK/apfs-role-backup）。"
-            warn "之后 iOS15 将无法再从这些卷正常启动；要还原，把备份块写回对应 paddr。"
-            local dspec=""
-            for i in $demoted; do dspec="$dspec $i:0x0"; done
-            spec="${dspec# } $spec"
-        fi
-    fi
     if [ "$write" -eq 1 ]; then
-        mnts="$(rsh '/sbin/mount')"
+        mnts="$(rsh '/sbin/mount')" || die "Could not verify APFS mounts. No roles changed."
         for pair in $spec; do
             idx="${pair%%:*}"
             case "$mnts" in *"/dev/disk0s1s$idx "*) die "s$idx 已挂载，先卸载" ;; esac
         done
     fi
-    stamp="$(date +%Y%m%d-%H%M%S)"
-    mkdir -p "$WK/apfs-role-backup"
+    # Validate every requested change before writing any volume metadata.
     for pair in $spec; do
         idx="${pair%%:*}"
         role=$(( ${pair##*:} ))
         [ -n "${APFS_V_BLOCK[$idx]:-}" ] || die "s$idx 不存在"
         blk="${APFS_V_BLOCK[$idx]}"
-        paddr="${APFS_V_PADDR[$idx]}"
         apfs_checksum_ok "$blk" || die "s$idx: 现有校验和无效，拒绝改动"
         # role 唯一性：其他卷不得占用同一 role
         if [ "$role" -ne 0 ]; then
             for i in "${APFS_V_IDX[@]}"; do
                 [ "$i" = "$idx" ] && continue
-                case " $demoted " in *" $i "*) continue ;; esac
                 if [ "$(rd_u16 "${APFS_V_BLOCK[$i]}" $APFS_ROLE_OFF)" = "$role" ]; then
-                    die "role 0x$(printf '%x' "$role") 已被 s$i 占用"
+                    die "Cannot assign s$idx role 0x$(printf '%x' "$role"): s$i already holds it. No roles changed."
                 fi
             done
         fi
         old="$(rd_u16 "$blk" $APFS_ROLE_OFF)"
         log "s$idx: role 0x$(printf '%x' "$old") -> 0x$(printf '%x' "$role")"
-        [ "$write" -eq 1 ] || continue
-        bak="$WK/apfs-role-backup/block-$paddr-s$idx-$stamp.bin"
-        cp -p "$blk" "$bak"
-        tmp="$WK/.role-s$idx.bin"
-        cp -p "$blk" "$tmp"
+    done
+    [ "$write" -eq 1 ] || return 0
+
+    backup_dir="$(mktemp -d "$WK/apfs-role-backup.XXXXXX")" ||
+        die "Cannot create APFS backup directory. No roles changed."
+    for pair in $spec; do
+        idx="${pair%%:*}"
+        paddr="${APFS_V_PADDR[$idx]}"
+        cp -p "${APFS_V_BLOCK[$idx]}" "$backup_dir/block-$paddr-s$idx.bin" ||
+            die "Cannot back up s$idx. No roles changed."
+    done
+    for pair in $spec; do
+        idx="${pair%%:*}"
+        role=$(( ${pair##*:} ))
+        paddr="${APFS_V_PADDR[$idx]}"
+        bak="$backup_dir/block-$paddr-s$idx.bin"
+        tmp="$backup_dir/staged-s$idx.bin"
+        cp -p "$bak" "$tmp" || die "Cannot stage APFS metadata for s$idx. No roles changed."
         printf "\\x$(printf '%02x' $(( role & 0xff )))\\x$(printf '%02x' $(( (role >> 8) & 0xff )))" |
-            dd of="$tmp" bs=1 seek=$(( APFS_ROLE_OFF )) count=2 conv=notrunc 2>/dev/null
-        apfs_seal "$tmp"
+            dd of="$tmp" bs=1 seek=$(( APFS_ROLE_OFF )) count=2 conv=notrunc 2>/dev/null ||
+            die "Cannot stage role for s$idx. No roles changed."
+        apfs_seal "$tmp" && apfs_checksum_ok "$tmp" ||
+            die "Invalid staged APFS checksum for s$idx. No roles changed."
+    done
+
+    log "APFS original blocks backed up in $backup_dir"
+    for pair in $spec; do
+        idx="${pair%%:*}"
+        paddr="${APFS_V_PADDR[$idx]}"
+        bak="$backup_dir/block-$paddr-s$idx.bin"
+        tmp="$backup_dir/staged-s$idx.bin"
+        if cmp -s "$bak" "$tmp"; then
+            rm -f "$tmp"
+            continue
+        fi
         apfs_write_block "$paddr" "$tmp"
         readback="$(apfs_read_block_fresh "$paddr")" || die "s$idx: 读回失败"
         if ! cmp -s "$tmp" "$readback"; then
@@ -524,19 +525,21 @@ apfs_set_roles() {   # "3:0x80 4:0x1 5:0x40" write(0/1)
         ok "  已写入并校验（备份: ${bak}）"
         rm -f "$tmp"
     done
-    if [ "$write" -eq 1 ]; then
-        APFS_CACHE_CLEAR=1
-        rm -rf "$(apfs_dir)"
-        apfs_list
-    fi
+    APFS_CACHE_CLEAR=1
+    rm -rf "$(apfs_dir)"
+    apfs_list
 }
 
-# 槽位 N 的卷名
-apfs_slot_name() {   # n
-    local n="$1"
-    apfs_volumes
-    [ -n "${APFS_V_BLOCK[$n]:-}" ] || return 1
-    dd if="${APFS_V_BLOCK[$n]}" bs=1 skip=$APFS_NAME_OFF count=256 2>/dev/null | LC_ALL=C tr -d '\000'
+guard_target_slot() {   # slice expected_name
+    local idx="$1" expected="$2" blk name role
+    blk="${APFS_V_BLOCK[$idx]:-}"
+    [ -n "$blk" ] || die "APFS s$idx is missing from the volume inventory."
+    apfs_checksum_ok "$blk" || die "APFS s$idx has an invalid checksum."
+    name="$(dd if="$blk" bs=1 skip=$((APFS_NAME_OFF)) count=256 2>/dev/null | LC_ALL=C tr -d '\000')" ||
+        die "Could not read the name of APFS s$idx."
+    [ "$name" = "$expected" ] || die "APFS s$idx is '$name', expected '$expected'."
+    role="$(rd_u16 "$blk" $APFS_ROLE_OFF)"
+    [ "$role" != "4" ] || die "APFS s$idx has the Recovery role (0x04). Refusing to modify it."
 }
 
 # 破坏性阶段前确认目标槽位真的是 SystemB / DataB，绝不碰原有卷（Update/xART/Preboot/...）
@@ -544,12 +547,11 @@ guard_target_volumes() {   # [system|data|both]
     local what="${1:-both}" data_name sys_name
     data_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $2}')"
     sys_name="$(printf '%s' "${T_VOL_CREATE:-SystemB DataB}" | awk '{print $1}')"
+    apfs_volumes
     if [ "$what" != "data" ]; then
-        [ "$(apfs_slot_name "$T_MNT_SYSTEM_B" 2>/dev/null)" = "$sys_name" ] ||
-            die "拒绝操作：s${T_MNT_SYSTEM_B} 不是 ${sys_name}（实际: '$(apfs_slot_name "$T_MNT_SYSTEM_B" 2>/dev/null)'）。先跑 volumes。"
+        guard_target_slot "$T_MNT_SYSTEM_B" "$sys_name"
     fi
     if [ "$what" != "system" ]; then
-        [ "$(apfs_slot_name "$T_MNT_DATA_B" 2>/dev/null)" = "$data_name" ] ||
-            die "拒绝操作：s${T_MNT_DATA_B} 不是 ${data_name}（实际: '$(apfs_slot_name "$T_MNT_DATA_B" 2>/dev/null)'）。先跑 volumes。"
+        guard_target_slot "$T_MNT_DATA_B" "$data_name"
     fi
 }

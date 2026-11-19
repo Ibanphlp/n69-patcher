@@ -1,13 +1,10 @@
 # N69AP iOS 16 Tethered Boot Pipeline
 
-Complete end-to-end solution for iPhone SE 1st Gen (N69AP) iOS 16.7.16 tethered boot.
+Experimental iOS 16.7.16 tethered boot work for the iPhone SE 1st Gen (N69AP). A successful boot remains unverified.
 
 ## Overview
 
-This pipeline boots iOS 16 on N69AP (iPhone SE 1st Gen, A9) by:
-1. Using the SE's own iOS 15.8.8 kernelcache for hardware drivers
-2. Porting those drivers into the iPad 5 iOS 16 kernelbase via SevenUP's footprint-displacement engine
-3. Building a complete boot chain with IM4M-signed images
+The build uses an iPad 5 kernel donor. The N69AP hardware and SEP adaptations remain disabled.
 
 ## Boot Sequence
 
@@ -32,10 +29,10 @@ dd if=/dev/disk2 bs=256 count=16384 | ./ramdisk-main/Linux/img4 -i - -m state/IM
 
 ### Quick Start
 ```bash
-# Build safe-minimal boot images (PMU + SEP patches only)
+# Build with the default mode
 ./run_boot.sh
 
-# Build full driver port mode
+# Build with the full mode
 ./run_boot.sh full
 
 # Build and boot device (device must be in DFU mode)
@@ -53,13 +50,9 @@ python run_n69_ios16_boot.py --im4m state/IM4M.bin --mode full --boot
 
 ## Build Modes
 
-| Mode | Patches Applied | Use Case |
-|------|----------------|----------|
-| `safe-minimal` | remove_ipad_drivers, generic_security, pmu_d2255, sep_legacy | Safest for unknown hardware |
-| `minimal` | remove_ipad_drivers, generic_security | Basic boot without driver ports |
-| `full` | All patches | Full driver functionality (PMU, Display, Audio, WiFi, etc.) |
+The `safe-minimal`, `minimal`, and `full` modes all leave unvalidated N69AP driver and SEP patches disabled.
 
-## Driver Transplants
+## Candidate Driver Transplants
 
 | Driver | Footprint | New Driver | Purpose |
 |--------|-----------|------------|---------|
@@ -79,7 +72,7 @@ All boot images are in `artifacts/boot/`:
 | `boot_iBEC.img4` | Second stage bootloader with boot-args |
 | `boot_DT.img4` | Native N69AP DeviceTree |
 | `boot_TC.img4` | TrustCache (rtsc) |
-| `boot_KC.img4` | Patched KernelCache with transplanted drivers |
+| `boot_KC.img4` | Patched donor KernelCache |
 | `sep.img4` | SEP firmware (signed as rsep) |
 
 ## Architecture
@@ -111,11 +104,7 @@ run_boot.sh                    # Shell wrapper
 - [x] root-partition selection via kairos
 - [x] iPad 5 iOS 16 kernelbase extraction
 - [x] iPad driver removal from prelink XML
-- [x] PMU D2255 driver transplant
-- [x] Display Pinot driver transplant
-- [x] Audio CS42L71/CS35L19 driver transplants
-- [x] SEP legacy compatibility patches
-- [x] WiFi BCM hash bypass
+- [ ] Validate N69AP PMU, display, audio, Wi-Fi, and SEP adaptations on the target
 - [x] Watchtower append
 - [x] KernelCache recompress
 - [x] IM4M signing for all components
@@ -136,11 +125,10 @@ This verifies:
 ## Troubleshooting
 
 ### Device reboots to recovery mode
-- Check boot-args: `rd=disk0s1s4` must match actual root partition
+- The target profile expects `SystemB` on `disk0s1s8`. Use the APFS status report to verify the name, role, and checksum.
 - Verify IM4M signing: `img4 -i boot_KC.img4 -M state/IM4M.bin` should work
 
 ### Kernel panics
-- Try `--mode safe-minimal` first
 - Check serial console for panic messages
 - Verify KASLR table rebuild in `append_wt_fix.py`
 

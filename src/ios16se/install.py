@@ -316,56 +316,8 @@ def main():
         help="Only stream rootfs"
     )
 
-    args = parser.parse_args()
-
-    config = InstallConfig(im4m_path=Path(args.im4m))
-
-    # Preflight
-    if not config.im4m_path.exists():
-        print(f"[x] IM4M not found: {config.im4m_path}")
-        sys.exit(1)
-
-    if not preflight_checks(config):
-        sys.exit(1)
-
-    # Create work directory
-    config.work_dir.mkdir(parents=True, exist_ok=True)
-
-    # Run installation steps
-    print("\n" + "=" * 60)
-    print("N69AP iOS 16 Installation Pipeline")
-    print("=" * 60)
-
-    if args.volumes_only:
-        create_apfs_volumes(config)
-        sys.exit(0)
-
-    if args.rootfs_only:
-        stream_rootfs(config, Path(args.ipsw), None)
-        sys.exit(0)
-
-    # Full installation
-    print("""
-Installation requires three phases (run from ramdisk SSH):
-
-1. Create APFS volumes:
-   $ sudo ./n61.sh volumes
-
-2. Stream rootfs (takes ~25 minutes):
-   $ sudo ./n61.sh rootfs
-
-3. Apply patches:
-   $ sudo ./n61.sh patch-rootfs
-
-4. Build boot images:
-   $ python run_n69_ios16_boot.py --mode full
-
-5. Boot the device:
-   $ ./run_boot.sh full --boot
-
-""")
-    print("[i] Run './run_boot.sh full' to build, or 'sudo ./n61.sh all' for complete install")
-    sys.exit(0)
+    parser.parse_args()
+    parser.exit(1, "The legacy Python entry point does not install or boot iOS.\n")
 
 
 if __name__ == "__main__":
