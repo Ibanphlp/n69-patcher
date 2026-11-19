@@ -1,5 +1,9 @@
 name: Host diagnostics
-on: [push, pull_request, workflow_dispatch]
+on:
+  pull_request:
+  push:
+    branches: [main, cursor/n69-panic-screen-5e77]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -9,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
