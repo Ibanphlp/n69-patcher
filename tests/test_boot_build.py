@@ -1,4 +1,5 @@
 import json
+import signal
 import subprocess
 import sys
 import tempfile
@@ -165,7 +166,7 @@ class BuildTests(unittest.TestCase):
                     self.assertEqual({name: (work / name).read_bytes() for name in old}, old)
                     self.assertEqual({path.name for path in work.iterdir()}, set(old))
 
-    def test_successful_tool_without_output_preserves_old_files(self):
+    def test_invalid_staged_output_stops_before_next_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ibss, ibec, tool = (root / name for name in ('ibss.im4p', 'ibec.im4p', 'patcher'))
@@ -174,11 +175,32 @@ class BuildTests(unittest.TestCase):
             work = root / 'decrypt'
             work.mkdir()
             (work / 'iBSS.dec').write_bytes(b'old ibss')
-            with patch('ios16se.build.check_device_pwned'), \
-                    patch('ios16se.build.run_checked'), \
-                    self.assertRaisesRegex(BuildError, 'nonempty iBSS.dec'):
-                decrypt_iboot(ibss, ibec, work, tool, tool, 'n69uap', tool)
-            self.assertEqual((work / 'iBSS.dec').read_bytes(), b'old ibss')
+            stages = ('iBSS decrypt', 'iBEC decrypt', 'iBoot64Patcher iBSS')
+            cases = (
+                ((None,), r'nonempty iBSS\.dec'),
+                ((b'',), r'nonempty iBSS\.dec'),
+                ((b'ibss', None), r'nonempty iBEC\.dec'),
+                ((b'ibss', b''), r'nonempty iBEC\.dec'),
+                ((b'same', b'same'), 'Decrypted iBSS and iBEC are identical'),
+                ((b'ibss', b'ibec', None), r'nonempty iBSS\.patched'),
+            )
+            for outputs, message in cases:
+                with self.subTest(outputs=outputs):
+                    payloads = iter(outputs)
+
+                    def fake_checked(cmd, _label):
+                        payload = next(payloads)
+                        if payload is not None:
+                            Path(cmd[-1]).write_bytes(payload)
+
+                    with patch('ios16se.build.check_device_pwned'), \
+                            patch('ios16se.build.run_checked', side_effect=fake_checked) as run, \
+                            self.assertRaisesRegex(BuildError, message):
+                        decrypt_iboot(ibss, ibec, work, tool, tool, 'n69uap', tool)
+                    self.assertEqual(tuple(call.args[1] for call in run.call_args_list),
+                                     stages[:len(outputs)])
+                    self.assertEqual((work / 'iBSS.dec').read_bytes(), b'old ibss')
+                    self.assertEqual({path.name for path in work.iterdir()}, {'iBSS.dec'})
 
     def test_first_tool_failure_is_reported_without_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -191,14 +213,31 @@ class BuildTests(unittest.TestCase):
                     result = subprocess.CompletedProcess([], 7, 'usb_timeout: 5\nECID: 123456',
                                                          'cannot write output')
                     responses = [subprocess.CompletedProcess([], 0, '', '')] * successful + [result]
+
+                    def fake_run(cmd, **kwargs):
+                        response = responses.pop(0)
+                        if response.returncode == 0:
+                            Path(cmd[-1]).write_bytes(b'ibss')
+                        return response
+
                     with patch('ios16se.build.check_device_pwned'), \
-                         patch('ios16se.build.subprocess.run', side_effect=responses) as run, \
+                         patch('ios16se.build.subprocess.run', side_effect=fake_run) as run, \
                          self.assertRaises(BuildError) as error:
                         decrypt_iboot(ibss, ibec, root / 'work', tool, tool, 'n69uap', tool)
                     self.assertEqual(run.call_count, successful + 1)
                     self.assertEqual(str(error.exception),
                                      f'{stage} decrypt failed (exit 7)\nstderr: cannot write output'
                                      '\nstdout: usb_timeout: 5\nECID: [redacted]')
+
+    def test_run_checked_reports_signal_instead_of_negative_exit(self):
+        from ios16se.build import run_checked
+        result = subprocess.CompletedProcess([], -signal.SIGABRT, 'Starting...', 'assure failed')
+        with patch('ios16se.build.subprocess.run', return_value=result), \
+                self.assertRaises(BuildError) as error:
+            run_checked(['tool'], 'Build tool')
+        self.assertEqual(str(error.exception),
+                         f'Build tool failed (signal SIGABRT ({signal.SIGABRT}))'
+                         '\nstderr: assure failed\nstdout: Starting...')
 
     def test_devicetree_inspects_im4p_and_rejects_invalid_inputs(self):
         def der(tag, data):

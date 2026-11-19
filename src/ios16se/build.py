@@ -21,6 +21,7 @@ import json
 import time
 import hashlib
 import re
+import signal
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -120,10 +121,25 @@ def _tool_diagnostic(text: str) -> str:
 def run_checked(cmd: list[str], label: str) -> None:
     """Run a tool, surfacing its real output on failure."""
     result = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
-    if result.returncode != 0:
-        raise BuildError(f"{label} failed (exit {result.returncode})\n"
-                         f"stderr: {_tool_diagnostic(result.stderr)}\n"
-                         f"stdout: {_tool_diagnostic(result.stdout)}")
+    status = result.returncode
+    if status == 0:
+        return
+    if status < 0:
+        signum = -status
+        try:
+            reason = f"signal {signal.Signals(signum).name} ({signum})"
+        except ValueError:
+            reason = f"signal {signum}"
+    else:
+        reason = f"exit {status}"
+    raise BuildError(f"{label} failed ({reason})\n"
+                     f"stderr: {_tool_diagnostic(result.stderr)}\n"
+                     f"stdout: {_tool_diagnostic(result.stdout)}")
+
+
+def _require_nonempty_output(path: Path) -> None:
+    if not path.is_file() or not path.stat().st_size:
+        raise BuildError(f"Build tool did not produce a nonempty {path.name}")
 
 
 def load_config(path: Path) -> BuildConfig:
@@ -210,17 +226,16 @@ def decrypt_iboot(ibss_im4p: Path, ibec_im4p: Path, output_dir: Path, gaster_bin
         staged_ibec = staging / ibec_dec.name
         staged_patched = staging / ibss_patched.name
         run_checked([str(gaster_bin), "decrypt", str(ibss_im4p), str(staged_ibss)], "iBSS decrypt")
+        _require_nonempty_output(staged_ibss)
         run_checked([str(gaster_bin), "decrypt", str(ibec_im4p), str(staged_ibec)], "iBEC decrypt")
+        _require_nonempty_output(staged_ibec)
+        if digest(staged_ibss) == digest(staged_ibec):
+            raise BuildError("Decrypted iBSS and iBEC are identical; refusing invalid boot chain")
 
         print("  Patching iBSS with iBoot64Patcher...")
         run_checked([str(iboot64patcher_bin), str(staged_ibss), str(staged_patched)],
                     "iBoot64Patcher iBSS")
-
-        for artifact in (staged_ibss, staged_ibec, staged_patched):
-            if not artifact.is_file() or not artifact.stat().st_size:
-                raise BuildError(f"Build tool did not produce a nonempty {artifact.name}")
-        if digest(staged_ibss) == digest(staged_ibec):
-            raise BuildError("Decrypted iBSS and iBEC are identical; refusing invalid boot chain")
+        _require_nonempty_output(staged_patched)
 
         receipt = {"inputs": expected, "ibss_output": digest(staged_patched),
                    "ibec_output": digest(staged_ibec)}
