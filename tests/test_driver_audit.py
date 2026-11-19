@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.ios16se.prelink import DriverRecord
+
 from research import audit_n69_transplants as audit_tool
 
 
@@ -33,12 +35,21 @@ class DriverAuditTests(unittest.TestCase):
                 with (
                     patch.object(tempfile, "tempdir", directory),
                     patch.object(audit_tool, "BindingBook"),
+                    patch.object(audit_tool, "inspect_record", create=True, return_value=DriverRecord(0, 16, (), ())),
                     patch.object(audit_tool, "transplant_footprint", side_effect=simulated_trial),
                 ):
                     report = audit_tool.audit(se, ipad)
 
                 self.assertEqual(sources, [b"ipad", b"pmu"] if fail_display else [b"ipad", b"pmu", b"display"])
                 self.assertEqual(report["structural_pass"], not fail_display)
+                self.assertIsNone(report["boot_mode"])
+                self.assertFalse(report["full_pipeline_tested"])
+                self.assertEqual(report["drivers"]["pmu"]["abi_compatibility"], "unknown")
+                self.assertEqual(report["drivers"]["pmu"]["hardware_initialization"], "unobserved")
+                self.assertEqual(report["drivers"]["pmu"]["input_sha256"], audit_tool.digest(ipad))
+                self.assertEqual(report["drivers"]["display"]["input_sha256"],
+                                 report["drivers"]["pmu"]["output_sha256"])
+                self.assertEqual(report["not_tested"]["spin69"], "SPI trial does not install the SPIN69 personality")
                 if fail_display:
                     self.assertIn("simulated failure", report["drivers"]["display"]["trial"])
                     self.assertIn("not run", report["drivers"]["touch"]["trial"])

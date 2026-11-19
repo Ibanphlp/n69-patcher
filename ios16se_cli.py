@@ -304,11 +304,21 @@ def boot_device(args, capture_logs: bool = False):
     # Final bootx
     say("Executing bootx...", "info")
     execute_command("bootx")
+    sent_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
     say("Boot sequence sent. Device boot remains unverified.", "info")
 
     if capture_logs:
-        return capture_kernel_logs(port=args.port, max_wait=args.wait, recovery_probe=probe)
+        context = {"requested_mode": args.mode, "bootx_sent_at_utc": sent_at}
+        manifest = IMAGES_DIR / "boot.json"
+        try:
+            built = json.loads(manifest.read_text())
+            context["manifest_kernelcache_mode"] = built.get("kernelcache_mode")
+            context["manifest_target"] = built.get("target")
+        except (OSError, ValueError):
+            context["manifest_kernelcache_mode"] = None
+        return capture_kernel_logs(port=args.port, max_wait=args.wait, recovery_probe=probe,
+                                   host_context=context)
 
 
 SSH_COMMANDS = (
@@ -368,7 +378,8 @@ def collect_ssh_logs(log_file: Path, port: int, wait: int) -> bool:
             return False
 
 
-def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe: str = ""):
+def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe: str = "",
+                        host_context: dict | None = None):
     """Keep the boot-capture SSH exit status even if stock reports are available."""
     from src.ios16se.sep import parse_irecovery_identity
 
@@ -376,7 +387,8 @@ def capture_kernel_logs(port: int = 2222, max_wait: int = 180, *, recovery_probe
         ecid, _ = parse_irecovery_identity(recovery_probe)
     except ValueError:
         ecid = None
-    connected = capture_logs(wait=max_wait, port=port, after_bootx=True, expected_ecid=ecid)
+    connected = capture_logs(wait=max_wait, port=port, after_bootx=True, expected_ecid=ecid,
+                             host_context=host_context)
     return 0 if connected else 1
 
 
@@ -411,8 +423,49 @@ def record_command(out_dir: Path, filename: str, cmd: list[str], timeout: float 
     return out
 
 
+def stored_report_summary(path: Path) -> dict:
+    header = {}
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            header = json.loads(handle.readline())
+    except (OSError, ValueError):
+        pass
+    if not isinstance(header, dict):
+        header = {}
+    return {
+        "file": str(path),
+        "reported_timestamp": header.get("timestamp"),
+        "reported_os": header.get("os_version"),
+        "collected_at_utc": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        "attribution": "unassigned",
+        "attribution_note": "A stored report can predate this boot attempt; compare its timestamp and OS build.",
+    }
+
+
+def write_evidence(out_dir: Path, connected: bool, info: str | None, matched: bool | None,
+                   host_context: dict | None) -> None:
+    fields = {}
+    for line in (info or "").splitlines():
+        key, sep, value = line.partition(": ")
+        if sep and key in ("ProductType", "ProductVersion", "BuildVersion"):
+            fields[key] = value.strip()
+    ssh_log = out_dir / "ssh.log"
+    ssh_text = ssh_log.read_text(errors="replace") if ssh_log.is_file() else ""
+    entry = "observed via SSH uname" if connected and "Darwin Kernel Version 22." in ssh_text else "unproven"
+    crash = out_dir / "crash"
+    reports = sorted(path for path in crash.rglob("*") if path.is_file()) if crash.is_dir() else []
+    evidence = {
+        "host_context": host_context,
+        "donor_kernel_entry": entry,
+        "ssh_connected": connected,
+        "device_observation": {**fields, "matches_pre_boot_ecid": matched} if fields else None,
+        "stored_reports": [stored_report_summary(path) for path in reports],
+    }
+    (out_dir / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
+
+
 def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False,
-                 expected_ecid: int | None = None) -> bool:
+                 expected_ecid: int | None = None, host_context: dict | None = None) -> bool:
     """Collect available host and device diagnostics independently."""
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     out_dir = Path(tempfile.mkdtemp(prefix="kernel-" if after_bootx else "capture-", dir=LOGS_DIR))
@@ -445,8 +498,11 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
 
     # After a restart the phone may first become visible to lockdownd while we
     # are waiting for SSH. Keep the two observations separate.
+    attempt = 0
     while True:
-        final = record_command(out_dir, "idevice-id-after.txt", ["idevice_id", "-l"], timeout=3)
+        attempt += 1
+        name = "idevice-id-after.txt" if not after_bootx else f"idevice-id-after-{attempt:03d}.txt"
+        final = record_command(out_dir, name, ["idevice_id", "-l"], timeout=3)
         final_ids = (final or "").split()
         if final is not None:
             record_event(out_dir, f"usbmux observation: {len(final_ids)} visible device(s)")
@@ -457,6 +513,8 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
             break
         time.sleep(min(2, remaining))
     reason = ""
+    info = None
+    matched = None
     if (initial is None and expected_ecid is None) or final is None:
         reason = "Device enumeration failed. Cannot verify the source of crash reports."
     elif len(final_ids) != 1:
@@ -475,7 +533,8 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
                 observed_ecid = int(chip_ids[0], 0) if len(chip_ids) == 1 else None
             except ValueError:
                 observed_ecid = None
-            if expected_ecid is None or observed_ecid != expected_ecid:
+            matched = expected_ecid is not None and observed_ecid == expected_ecid
+            if not matched:
                 reason = "Cannot match the returned SE to the device observed before this boot attempt."
             else:
                 record_event(out_dir, "device-info-after.txt matches pre-boot ECID")
@@ -488,6 +547,7 @@ def capture_logs(wait: int = 180, port: int = 2222, *, after_bootx: bool = False
         record_command(out_dir, "crash-report.txt",
                        ["idevicecrashreport", "-u", udid, "-k", str(destination)], timeout=120)
 
+    write_evidence(out_dir, connected, info, matched, host_context)
     say(f"Diagnostics saved to {out_dir}", "info")
     return connected
 

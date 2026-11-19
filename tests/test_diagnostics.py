@@ -1,6 +1,7 @@
 import contextlib
 from datetime import datetime, timedelta
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -187,6 +188,10 @@ class DiagnosticsTests(unittest.TestCase):
                     out = next(observations)
                 if cmd[0] == "ideviceinfo":
                     out = "ProductType: iPhone8,4\nProductVersion: 15.8.8\nBuildVersion: 19H422\nUniqueChipID: 123\n"
+                if cmd[0] == "idevicecrashreport":
+                    (Path(cmd[-1]) / "old.ips").write_text(
+                        '{"timestamp":"2026-10-01 10:00:00 +0200","os_version":"iPhone OS 15.8.8 (19H422)"}\n'
+                        '{"panicString":"old panic"}')
                 return subprocess.CompletedProcess(cmd, 0, out.encode(), b"")
 
             with (
@@ -203,6 +208,17 @@ class DiagnosticsTests(unittest.TestCase):
             self.assertTrue((report / "device-info-after.txt").is_file(), "stock reappearance was lost")
             self.assertIn("19H422", (report / "device-info-after.txt").read_text())
             self.assertIn(["idevicecrashreport", "-u", "se", "-k", str(report / "crash")], commands)
+            self.assertEqual((report / "idevice-id-after-001.txt").read_text(), "")
+            self.assertEqual((report / "idevice-id-after-002.txt").read_text(), "se")
+            evidence = json.loads((report / "evidence.json").read_text())
+            self.assertIsNone(evidence["host_context"])
+            self.assertEqual(evidence["donor_kernel_entry"], "unproven")
+            self.assertTrue(evidence["device_observation"]["matches_pre_boot_ecid"])
+            old = evidence["stored_reports"][0]
+            self.assertEqual(old["reported_timestamp"], "2026-10-01 10:00:00 +0200")
+            self.assertEqual(old["attribution"], "unassigned")
+            self.assertIn("19H422", old["reported_os"])
+            self.assertNotEqual(old["collected_at_utc"], old["reported_timestamp"])
             events = (report / "timeline.log").read_text().splitlines()
             self.assertIn("host returned from bootx", events[0])
             self.assertTrue(any("SSH unavailable" in event for event in events))
