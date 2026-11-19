@@ -17,6 +17,8 @@ import struct
 import sys
 from pathlib import Path
 
+from .touch_audit import SPIN, compare_spin69
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "SevenUP-main" / "src"))
 
@@ -42,7 +44,6 @@ PMU_FOOTPRINT = "com.apple.driver.AppleD2365PMU"
 PMU_DONOR = "com.apple.driver.AppleD2255PMU"
 SPI = "com.apple.driver.AppleMultitouchSPI"
 SPIC = "com.apple.driver.AppleMultitouchSPIC1F15"
-SPIN = "com.apple.driver.AppleMultitouchSPIN69"
 CHESTNUT = "com.apple.driver.AppleChestnutDisplayPMU"
 DIALOG = "com.apple.driver.AppleDialogPMU"
 
@@ -666,10 +667,10 @@ def replace_personality(source: Path, donor: Path, work: Path) -> Path:
     produced = KC(output)
     if SPIN not in produced.kexts or SPIC in produced.kexts:
         raise PortError("iPad SPI personality was removed before the SE personality linked")
-    personalities = produced.kexts[SPIN].get("IOKitPersonalities") or {}
-    match = str(personalities)
-    if "multi-touch,n69" not in match or "AppleMultitouchN1SPI" not in match:
-        raise PortError("SPIN69 personality is not the SE SPI match")
+    check = compare_spin69(donor_kc.data[donor_kc.base:], produced.data[produced.base:])
+    if check["status"] != "match":
+        reason = check.get("reason") or ", ".join(check["differences"])
+        raise PortError(f"SPIN69 personality check failed: {reason}")
     return output
 
 

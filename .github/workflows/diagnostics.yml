@@ -25,6 +25,7 @@ jobs:
         run: |
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_diagnostics.py' -v
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_evidence.py' -v
+          python -W error::ResourceWarning -m unittest discover -s tests -p 'test_spin69_audit.py' -v
           python -W error::ResourceWarning -m unittest discover -s tests -p 'test_apfs_diagnostics.py' -v
       - name: Check Bash syntax and shell entry point
         run: |

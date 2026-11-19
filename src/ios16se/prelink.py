@@ -35,44 +35,68 @@ class DriverRecord:
     personalities: tuple[str, ...]
 
 
-def driver_records(data: bytes) -> dict[str, DriverRecord]:
-    """Read the direct kext dictionaries. IDREFs can point outside their record."""
-    try:
-        root = ET.fromstring(data.rstrip(b"\0"))
-    except ET.ParseError as error:
-        raise PrelinkError(f"XML de préliaison invalide : {error}") from error
-    ids = {}
-    for node in root.iter():
-        if "ID" in node.attrib:
-            identifier = node.attrib["ID"]
-            if identifier in ids:
-                raise PrelinkError(f"ID XML dupliqué : {identifier}")
-            ids[identifier] = node
+class _PrelinkDocument:
+    """Read direct dictionaries while resolving references across the document."""
 
-    def resolve(node):
+    def __init__(self, data: bytes):
+        try:
+            root = ET.fromstring(data.rstrip(b"\0"))
+        except ET.ParseError as error:
+            raise PrelinkError(f"XML de préliaison invalide : {error}") from error
+        self.ids = {}
+        for node in root.iter():
+            if "ID" in node.attrib:
+                identifier = node.attrib["ID"]
+                if identifier in self.ids:
+                    raise PrelinkError(f"ID XML dupliqué : {identifier}")
+                self.ids[identifier] = node
+        if root.tag == "plist" and len(root) == 1:
+            root = root[0]
+        entries = self.fields(root).get("_PrelinkInfoDictionary")
+        if entries is None or self.resolve(entries).tag != "array":
+            raise PrelinkError("tableau _PrelinkInfoDictionary absent")
+        self.bundles = {}
+        for entry in self.resolve(entries):
+            record = self.fields(entry)
+            name = record.get("CFBundleIdentifier")
+            if name is None:
+                raise PrelinkError("CFBundleIdentifier absent")
+            name = self.resolve(name)
+            if name.tag != "string" or not name.text or name.text in self.bundles:
+                raise PrelinkError(f"CFBundleIdentifier invalide ou dupliqué : {name.text}")
+            self.bundles[name.text] = record
+        if not self.bundles:
+            raise PrelinkError("aucun identifiant de pilote dans les métadonnées préliées")
+
+    def resolve(self, node):
         seen = set()
         while "IDREF" in node.attrib:
             target = node.attrib["IDREF"]
-            if target in seen or target not in ids:
+            if target in seen or target not in self.ids:
                 raise PrelinkError(f"IDREF invalide : {target}")
             seen.add(target)
-            node = ids[target]
+            node = self.ids[target]
         return node
 
-    def fields(node):
-        node = resolve(node)
+    def fields(self, node):
+        node = self.resolve(node)
         if node.tag != "dict" or len(node) % 2:
             raise PrelinkError("dictionnaire de préliaison invalide")
         result = {}
         for key, value in zip(node[::2], node[1::2]):
-            key = resolve(key)
+            key = self.resolve(key)
             if key.tag != "key" or not key.text or key.text in result:
                 raise PrelinkError("clé de préliaison invalide ou dupliquée")
             result[key.text] = value
         return result
 
+
+def driver_records(data: bytes) -> dict[str, DriverRecord]:
+    """Read the direct kext dictionaries. IDREFs can point outside their record."""
+    document = _PrelinkDocument(data)
+
     def integer(node):
-        node = resolve(node)
+        node = document.resolve(node)
         try:
             value = int(node.text or "", 0)
         except ValueError as error:
@@ -81,32 +105,55 @@ def driver_records(data: bytes) -> dict[str, DriverRecord]:
             raise PrelinkError("entier de préliaison invalide")
         return value
 
-    if root.tag == "plist" and len(root) == 1:
-        root = root[0]
-    entries = fields(root).get("_PrelinkInfoDictionary")
-    if entries is None or resolve(entries).tag != "array":
-        raise PrelinkError("tableau _PrelinkInfoDictionary absent")
     records = {}
-    for entry in resolve(entries):
-        record = fields(entry)
-        if "CFBundleIdentifier" not in record:
-            raise PrelinkError("CFBundleIdentifier absent")
-        name = resolve(record["CFBundleIdentifier"])
-        if name.tag != "string" or not name.text or name.text in records:
-            raise PrelinkError(f"CFBundleIdentifier invalide ou dupliqué : {name.text}")
+    for name, record in document.bundles.items():
         addr = record.get("_PrelinkExecutableLoadAddr")
         size = record.get("_PrelinkExecutableSize")
         if (addr is None) != (size is None):
-            raise PrelinkError(f"plage exécutable incomplète pour {name.text}")
-        records[name.text] = DriverRecord(
+            raise PrelinkError(f"plage exécutable incomplète pour {name}")
+        records[name] = DriverRecord(
             integer(addr) if addr is not None else None,
             integer(size) if size is not None else None,
-            tuple(sorted(fields(record["OSBundleLibraries"]))) if "OSBundleLibraries" in record else (),
-            tuple(sorted(fields(record["IOKitPersonalities"]))) if "IOKitPersonalities" in record else (),
+            tuple(sorted(document.fields(record["OSBundleLibraries"]))) if "OSBundleLibraries" in record else (),
+            tuple(sorted(document.fields(record["IOKitPersonalities"]))) if "IOKitPersonalities" in record else (),
         )
-    if not records:
-        raise PrelinkError("aucun identifiant de pilote dans les métadonnées préliées")
     return records
+
+
+MATCH_FIELDS = ("CFBundleIdentifier", "IOClass", "IOProviderClass", "IONameMatch")
+
+
+def personality_match_fields(kernel: bytes, bundle: str) -> tuple[str, dict]:
+    """Read the four matching properties from one unambiguous IOKit personality."""
+    document = _PrelinkDocument(_prelink_region(kernel))
+    entry = document.bundles.get(bundle)
+    if entry is None:
+        raise PrelinkError(f"bundle absent : {bundle}")
+    if "IOKitPersonalities" not in entry:
+        raise PrelinkError(f"IOKitPersonalities absent pour {bundle}")
+    personalities = document.fields(entry["IOKitPersonalities"])
+    if len(personalities) != 1:
+        raise PrelinkError(f"{bundle} déclare {len(personalities)} personnalités, une attendue")
+    label, node = next(iter(personalities.items()))
+    properties = document.fields(node)
+
+    def string(value, key):
+        value = document.resolve(value)
+        if value.tag != "string" or len(value) or not value.text:
+            raise PrelinkError(f"{bundle}: chaîne attendue dans {key}")
+        return value.text
+
+    matches = {}
+    for key in MATCH_FIELDS:
+        value = properties.get(key)
+        if value is None:
+            raise PrelinkError(f"{bundle}: champ {key} absent")
+        value = document.resolve(value)
+        if key == "IONameMatch" and value.tag == "array":
+            matches[key] = [string(item, key) for item in value]
+        else:
+            matches[key] = string(value, key)
+    return label, matches
 
 
 def bundle_ids_from_prelink(data: bytes) -> DriverInventory:

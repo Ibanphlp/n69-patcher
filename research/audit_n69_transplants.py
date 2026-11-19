@@ -24,6 +24,7 @@ from ios16se.driver_transplant import (  # noqa: E402
 )
 
 from ios16se.prelink import inspect_record, PrelinkError  # noqa: E402
+from ios16se.touch_audit import compare_spin69  # noqa: E402
 
 CASES = (
     ("pmu", PMU_FOOTPRINT, PMU_DONOR),
@@ -142,23 +143,35 @@ def main() -> int:
     parser.add_argument("--ipad-kernel", type=Path, default=ROOT / "work/build/donor_kc.raw")
     parser.add_argument("--se-kernel", type=Path, default=ROOT / "artifacts/n69ap-15.8.8/KernelCache.raw")
     parser.add_argument("--write", type=Path, default=None, help="also write the JSON report here")
-    parser.add_argument("--inspect-only", action="store_true",
-                        help="read metadata and input hashes without running transplant trials")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--inspect-only", action="store_true",
+                      help="read metadata and input hashes without running transplant trials")
+    mode.add_argument("--compare-spin69", metavar="KERNEL", type=Path,
+                      help="only compare the tactile personality of this raw kernel with --se-kernel")
     args = parser.parse_args()
-    if not args.ipad_kernel.is_file() or not args.se_kernel.is_file():
-        print(f"kernels missing: {args.ipad_kernel} {args.se_kernel}", file=sys.stderr)
-        return 2
+    inputs = (args.se_kernel, args.compare_spin69 or args.ipad_kernel)
+    for kernel in inputs:
+        if not kernel.is_file():
+            print(f"kernel missing: {kernel}", file=sys.stderr)
+            return 2
     if args.write and args.write.exists() and any(
-        args.write.samefile(kernel) for kernel in (args.se_kernel, args.ipad_kernel)
+        args.write.samefile(kernel) for kernel in inputs
     ):
         print("Report destination refers to an input kernel.", file=sys.stderr)
         return 2
-    report = audit(args.se_kernel, args.ipad_kernel, inspect_only=args.inspect_only)
+    if args.compare_spin69 is not None:
+        report = compare_spin69(args.se_kernel.read_bytes(), args.compare_spin69.read_bytes())
+        reference = json.loads((ROOT / "research/n69-reference-metadata.json").read_text())
+        report["reference_matches_archived_se"] = report["reference_sha256"] == reference["se_kernel_sha256"]
+        passed = report["status"] == "match"
+    else:
+        report = audit(args.se_kernel, args.ipad_kernel, inspect_only=args.inspect_only)
+        passed = args.inspect_only or report["structural_pass"]
     text = json.dumps(report, indent=2)
     print(text)
     if args.write:
         args.write.write_text(text + "\n")
-    return 0 if args.inspect_only or report["structural_pass"] else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":

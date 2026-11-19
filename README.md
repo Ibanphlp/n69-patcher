@@ -20,6 +20,13 @@ Recapture the SEP after restoring the stock system or changing devices. Capture 
 
 Use the [one-page capture sheet](FICHE_ESSAI.md) to record, compare and share an attempt.
 
+To check the N69 touchscreen personality in an existing raw kernelcache, run
+`python3 research/audit_n69_transplants.py --se-kernel STOCK_SE.raw --compare-spin69 CANDIDATE.raw`.
+The report compares the personality label and the typed values of `CFBundleIdentifier`,
+`IOClass`, `IOProviderClass` and `IONameMatch`. It records both input hashes and
+whether the supplied reference matches the archived SE kernel. Exit status zero
+means these fields match the supplied reference. Touch input still requires a device observation.
+
 ## Requirements
 - Intel-based Mac (for DFU tool compatibility)
 - iPhone SE 1st Gen (N69AP)
