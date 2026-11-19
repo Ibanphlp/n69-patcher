@@ -206,17 +206,21 @@ if [ -z "${LIOS_BIN:-}" ]; then
 fi
 export LIOS_BIN
 
-if [ "$OPT_DRY_RUN" -eq 1 ]; then
-    log "工作目录（dry-run，不创建）: $WK"
-else
-    log "工作目录: $WK"
-fi
+case "$STAGE:$OPT_DRY_RUN" in
+    status:*) ;;
+    *:1) log "工作目录（dry-run，不创建）: $WK" ;;
+    *) log "工作目录: $WK" ;;
+esac
 
 # ---------- 工作目录锁：避免两个 n61.sh 同时操作同一 -latest 目录 ----------
 LOCK_DIR=""
 LOCKED=0
 lock_workdir() {
     [ "$OPT_DRY_RUN" -eq 1 ] && return 0
+    # Status has no persistent work files. Keep the lock if a build directory exists.
+    if [ "$STAGE" = "status" ] && [ ! -d "$WK" ]; then
+        return 0
+    fi
     # 目录不可写多半是 sudo 运行留下的属主（后续 build 会全部失败，先给出修复命令）
     if [ ! -w "$WK" ]; then
         die "工作目录不可写: ${WK}
